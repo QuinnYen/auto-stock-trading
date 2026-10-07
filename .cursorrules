@@ -1,0 +1,22 @@
+# GIT COMMIT MESSAGE RULES
+# IMPORTANT: These rules apply to the "Generate with AI" (Sparkle icon) in the Git panel.
+
+You MUST always generate git commit messages in Traditional Chinese (繁體中文).
+Use the Conventional Commits specification.
+
+## 格式規範：
+<type>(<scope>): <description>
+
+## 允許的 <type> 類型：
+- feat: 新功能
+- fix: 修復 Bug
+- docs: 文件修改
+- style: 程式碼格式修改（不影響邏輯，如空白、分號等）
+- refactor: 程式碼重構（既不修復 Bug 也不增加新功能）
+- perf: 提升效能的修改
+- test: 測試案例修改
+- chore: 建置程序或輔助工具的變動
+
+## 注意事項：
+- 必須使用「繁體中文」填寫 <description>。
+- 保持訊息簡潔有力。
