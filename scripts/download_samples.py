@@ -1,4 +1,4 @@
-"""下載驗證用的樣本股票，原樣存成 data/raw/*.json（尚未進 SQLite）。"""
+"""下載驗證用的樣本股票，原樣存成 data/raw/<資料集>/*.json（尚未進 SQLite）。"""
 import json
 import sys
 from pathlib import Path
@@ -8,7 +8,8 @@ sys.path.insert(0, str(ROOT / "src" / "data"))
 import finmind  # noqa: E402
 
 RAW = ROOT / "data" / "raw"
-RAW.mkdir(parents=True, exist_ok=True)
+for sub in ("price", "dividend_result", "capital_reduction"):
+    (RAW / sub).mkdir(parents=True, exist_ok=True)
 
 SAMPLES = ["2330", "2327", "1204", "2384", "2456"]
 START = "1994-10-01"
@@ -23,7 +24,7 @@ DATASETS = [
 
 for stock_id in SAMPLES:
     for dataset, prefix in DATASETS:
-        out = RAW / f"{prefix}_{stock_id}.json"
+        out = RAW / prefix / f"{prefix}_{stock_id}.json"
         if out.exists():
             print("skip", out.name)
             continue

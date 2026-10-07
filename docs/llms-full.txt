@@ -1,0 +1,990 @@
+# FinMind - Complete RESTful API & Dataset Reference
+
+> FinMind is an open-source financial data platform providing 75+ Taiwan market datasets and international market data (US, UK, Europe, Japan) via RESTful API. Data is updated daily.
+
+## RESTful API
+
+Base URL: `https://api.finmindtrade.com/api/v4`
+
+### Authentication
+
+Register at finmindtrade.com, get token via login API or website. Pass token as `Authorization: Bearer {token}` header.
+
+Rate limit: 300 requests/hour (without token), 600/hour (free registered token); paid plans up to 20,000/hour — see Membership Tiers & Pricing below.
+
+#### Update Token (Self-Service Reset)
+
+If you suspect your token has leaked, reset it yourself on the [user info page](https://finmindtrade.com/analysis/#/account/user) — no need to contact support.
+
+Steps:
+
+1. Open the [user info page](https://finmindtrade.com/analysis/#/account/user)
+2. Under the `api token` field, click the "Update Token" button
+3. Confirm — a new token is generated immediately
+
+Behavior:
+
+- Generates a new token in one click
+- Old token is invalidated immediately
+- All devices are signed out and must log in again to obtain the new token
+- Self-service — no support ticket required
+
+Tip: rotate your token regularly to keep your account secure.
+
+### Endpoints
+
+#### POST /login
+Get auth token.
+- Params: user_id (str), password (str)
+- Response: `{ "token": "..." }`
+
+#### GET /data
+Fetch dataset.
+- Params: dataset (str, required), data_id (str), start_date (str, YYYY-MM-DD), end_date (str, YYYY-MM-DD)
+- Response: `{ "msg": "success", "status": 200, "data": [ { ... }, ... ] }`
+
+#### GET /datalist
+List available data_id values for a dataset.
+- Params: dataset (str, required)
+
+#### GET /translation
+Column name Chinese-English mapping.
+- Params: dataset (str, required)
+
+### API Usage Count (API 使用次數)
+
+Check current API usage and quota.
+
+#### GET https://api.web.finmindtrade.com/v2/user_info
+- Headers: Authorization: Bearer {token}
+- Response fields: `user_count` (int, 使用次數), `api_request_limit` (int, api 使用上限)
+
+```python
+# Package
+from FinMind.data import FinMindApi
+api = FinMindApi()
+api.login_by_token(token)
+print(api.api_usage_limit)
+
+# Requests
+import requests
+headers = {"Authorization": f"Bearer {token}"}
+url = "https://api.web.finmindtrade.com/v2/user_info"
+resp = requests.get(url, headers=headers)
+resp.json()["user_count"]  # 使用次數
+resp.json()["api_request_limit"]  # api 使用上限
+```
+
+#### Rate Limit Exceeded (API 用量超出上限)
+When quota is exceeded, API returns HTTP 402:
+```
+{'msg': 'Requests reach the upper limit. https://finmindtrade.com/', 'status': 402}
+```
+
+---
+
+### Example
+
+```
+GET https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=2330&start_date=2020-04-01&end_date=2020-04-12
+Authorization: Bearer {token}
+```
+
+```python
+import requests
+url = "https://api.finmindtrade.com/api/v4/data"
+headers = {"Authorization": "Bearer your_token"}
+params = {
+    "dataset": "TaiwanStockPrice",
+    "data_id": "2330",
+    "start_date": "2020-04-01",
+    "end_date": "2020-04-12",
+}
+resp = requests.get(url, headers=headers, params=params)
+data = resp.json()
+```
+
+### Async Batch Query (Python SDK)
+
+Use `stock_id_list` with `use_async=True` to query multiple stocks concurrently for faster performance.
+
+```python
+from FinMind.data import DataLoader
+api = DataLoader()
+api.login_by_token(api_token='your_token')
+df = api.taiwan_stock_daily(
+    stock_id_list=['2330', '2317', '2454', '3008'],
+    start_date='2024-01-01',
+    end_date='2024-12-31',
+    use_async=True,
+)
+```
+
+Async batch query is supported by datasets that require `data_id` parameter. Not supported by: info, snapshot, tick, total aggregation, and convertible bond datasets.
+
+## Membership Tiers & Pricing
+
+All prices in TWD (New Taiwan Dollars). One-time payment, no auto-renewal; the plan falls back to Free when it expires. Buy at the [sponsor page](https://finmindtrade.com/analysis/#/Sponsor/sponsor). Full comparison: [Pricing](https://finmind.github.io/en/Pricing/).
+
+| Plan | Monthly | Yearly | API limit | Datasets | License |
+|---|---|---|---|---|---|
+| Free | NT$0 | NT$0 | 300 req/hour (600 with registered token) | 45 | Non-commercial |
+| Backer | NT$699 | NT$5,499 | 1,600 req/hour | 81 | Non-commercial |
+| Sponsor (recommended) | NT$999 | NT$8,888 | 6,000 req/hour | 97 | Non-commercial |
+| Sponsor Pro | NT$3,330 | NT$29,620 | 20,000 req/hour | 97 + whole-day all-symbol download | Commercial |
+
+- **Free**: Basic datasets.
+- **Backer**: More datasets (marked "backer" below), all-stocks-by-date queries without `data_id`.
+- **Sponsor**: Full access to all datasets including real-time data, branch trading data, and minute-level data.
+- **Sponsor Pro**: Everything in Sponsor, plus commercial license (SaaS / AI / web / app / internal systems) and whole-day all-symbol download via `/storage_objects`.
+- Upgrade anytime by paying the prorated difference for the remaining days (minimum NT$100).
+- All plans: no redistribution of raw data, no mirror APIs, no displaying real-time data directly on public web/app interfaces; attribution "FinMind" required.
+
+---
+
+## Taiwan Market - Technical (20 datasets)
+
+### TaiwanStockInfo (台股總覽)
+- Tier: Free
+- Params: dataset=TaiwanStockInfo
+- Columns: industry_category (str), stock_id (str), stock_name (str), type (str), date (str)
+- Note: one row per market the stock has belonged to. A stock that moved from the emerging board (興櫃) to TWSE/TPEX keeps its old `emerging` row, whose `date` is frozen at the day it left the emerging board, alongside a `twse`/`tpex` row carrying the current date. Take the row with the latest `date` per `stock_id` as the current market — filtering on `type == "emerging"` alone also returns stocks that have already transferred. This matters most for TaiwanStockPriceTick and TaiwanStockKBar, whose `volume` unit depends on the market (lots for TWSE/TPEX, shares for emerging).
+
+### TaiwanStockInfoWithWarrant (台股總覽含權證)
+- Tier: Free
+- Params: dataset=TaiwanStockInfoWithWarrant
+- Columns: industry_category (str), stock_id (str), stock_name (str), type (str), date (str)
+
+### TaiwanStockInfoWithWarrantSummary (台股權證標的對照表)
+- Tier: Sponsor
+- Params: dataset=TaiwanStockInfoWithWarrantSummary, data_id=2330, start_date=2020-04-06
+- Columns: stock_id (str), date (str), close (float), target_stock_id (str), target_close (float), type (str), fulfillment_method (str), end_date (str), fulfillment_start_date (str), fulfillment_end_date (str), exercise_ratio (float), fulfillment_price (float)
+- Note: data_id is the underlying (mother stock) target_stock_id, not the warrant code; covers both listed (TWSE) and OTC (TPEX) warrants, OTC history back to 2011-01-03. Omit data_id to fetch the whole table and reverse-lookup a warrant's underlying.
+- Note: a warrant code (stock_id) can map to different underlyings over time — after a warrant expires and is delisted, its code is recycled and reissued to a new warrant on a possibly different underlying. The same stock_id may therefore have multiple rows, each with its own date (listing date), end_date (last trading date) and target_stock_id. To resolve a code's underlying on a given day, pick the row whose [date, end_date] interval contains that day.
+
+### TaiwanStockTradingDate (台股交易日)
+- Tier: Free
+- Params: dataset=TaiwanStockTradingDate
+- Columns: date (str)
+
+### TaiwanStockPrice (股價日成交資訊)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 1994-10-01 ~ now
+- Update: Mon-Fri 17:30
+- Params: dataset=TaiwanStockPrice, data_id=2330, start_date=2020-04-02, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockPrice, start_date=2020-04-02 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), Trading_Volume (int64), Trading_money (int64), open (float64), max (float64), min (float64), close (float64), spread (float64), Trading_turnover (float32)
+- Note: For emerging-board (興櫃) stocks, open is the previous-day average price (前日均價) published by TPEx, not an opening price, so it can fall outside [min, max] on volatile days. This is a field-definition difference, not a data error — max/min/close are the day's high/low/last and are correct. Listed (TWSE)/OTC (TPEX) stocks are unaffected. To tell which market a stock is in, use TaiwanStockInfo and take the row with the latest `date` per `stock_id` — a stock that later moved to TWSE/TPEX keeps its old `emerging` row (see the TaiwanStockInfo note). Trading_Volume here is in shares for every market, unlike the intraday tick/K-bar tables.
+- Note: When TWSE/TPEx publishes no traded price for a stock on a given day, open/max/min/close are shown as `--` in the source and are stored here as 0, so open/max/min/close/spread are all 0 for that row. The source publication carries no price — this is not a crawling gap. It can occur in any market (TWSE/TPEX/Emerging): a halted stock, a day with no trades, or a day with only sporadic trades that produce no published price. Example (no trades): 2317 on 2025-07-30 has Trading_Volume=0 and open/max/min/close=0, while 2025-07-29 (close=171.5) and 2025-07-31 (close=178) are normal. Example (volume but no price): 9929 on 2025-07-31 has Trading_Volume=451 yet open/max/min/close=0. Because of the second case, do NOT filter these rows with `Trading_Volume > 0` alone — filter on the price column instead, e.g. `df[df["close"] > 0]`, or forward-fill from the previous trading day. TaiwanStockPriceAdj does NOT show 0 on these days (see its own note).
+
+### TaiwanStockPriceAdj (台灣還原股價資料表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 1994-10-01 ~ now
+- Update: Mon-Fri 17:30
+- Params: dataset=TaiwanStockPriceAdj, data_id=2330, start_date=2020-04-02, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockPriceAdj, start_date=2020-04-06 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), Trading_Volume (int64), Trading_money (int64), open (float64), max (float64), min (float64), close (float64), spread (float64), Trading_turnover (float32)
+- Note: Adjusted prices are computed backwards from the most recent trading day, so the adjusted price on an event day equals that day's raw price and the adjustment appears in the history before it. Ex-dividend/ex-rights, capital reduction, stock split and par value change factors are applied in the post-close update on the event day itself, not deferred to the next trading day. If a scheduled event date falls on a market-wide closure (e.g. a typhoon suspension) and is postponed, the adjustment follows the day trading actually took place, not the originally scheduled date.
+- Note: On days where TWSE/TPEx publishes no traded price (open/max/min/close = 0 in TaiwanStockPrice), this table does NOT show 0 — it carries forward the previous trading day's adjusted price, while Trading_Volume keeps the day's actual value. Example: 2317 on 2025-07-30 is open=169.94, max=170.43, min=166.06, close=166.54 here (2025-07-29's adjusted price) with Trading_Volume=0, whereas TaiwanStockPrice shows 0 for all four price columns. Use this table for a price series with no 0 gaps; use TaiwanStockPrice's 0 to identify which days had no published price.
+
+### TaiwanStockPriceTick (台灣股價歷史逐筆資料表)
+- Tier: Backer/Sponsor
+- Data range: 2018-12-07 ~ now
+- Update: Mon-Fri 15:30
+- Params: dataset=TaiwanStockPriceTick, data_id=2330, start_date=2020-01-02
+- Columns: date (str), stock_id (str), deal_price (float64), volume (int64), Time (str), TickType (str: 0=unknown, 1=buyer-initiated (trade at ask), 2=seller-initiated (trade at bid))
+- Note: Single day per request. Whole-day files (storage_objects) are sorted by stock_id, Time; trades at the same time are in execution order.
+- TickType correction: every trading day from 2018-12-07 to 2023-03-10 was regenerated using the same rule applied from 2023-03-13 onward; the old version labelled undeterminable trades as 1 (buyer-initiated), which inflated the buyer-initiated share. Re-download if you fetched these dates before.
+- Known limitation: for dates before 2021-06-22, roughly 8-10% of trades have TickType 0 (undetermined) because the source data carries no side information for them; treat 0 separately rather than merging it into either side.
+- Missing dates: 2018-12-22, 2019-02-20, 2019-02-21, 2019-02-22 have no tick data; 2019-05-16 only has data for a small number of ETFs.
+- Note: `volume` keeps each market's native trading unit — lots (1 lot = 1,000 shares) for TWSE/TPEX stocks, shares for emerging-board (興櫃) stocks — so both units appear in the same day of data. This is a market difference, not a data error, and the same rule applies to TaiwanStockKBar. Determine the market from TaiwanStockInfo by taking the row with the latest `date` per `stock_id`; filtering on `type == "emerging"` alone also picks up already-transferred stocks, which makes the emerging volume unit look inconsistent.
+- Note: when reconciling against TaiwanStockPrice.Trading_Volume (always in shares), TWSE/TPEX daily volume includes block trades (see TaiwanStockBlockTrade) while tick data does not, so the two will not match exactly.
+- Bulk download (sponsorpro): `GET /api/v4/storage_objects?dataset=TaiwanStockPriceTick&date=2019-01-02` returns whole-day parquet via signed URL, ignores data_id. Python SDK: `api.taiwan_stock_tick(date='2019-01-02', use_object=True)`.
+
+### TaiwanStockPER (個股 PER、PBR 資料表)
+- Tier: Free
+- Data range: 2005-10-01 ~ now
+- Update: Mon-Fri 18:00
+- Params: dataset=TaiwanStockPER, data_id=2330, start_date=2020-04-01, end_date=2020-04-12
+- Columns: date (str), stock_id (str), dividend_yield (float64), PER (float64), PBR (float64)
+
+### TaiwanStockStatisticsOfOrderBookAndTrade (每5秒委託成交統計)
+- Tier: Free
+- Data range: 2005-01-01 ~ now
+- Params: dataset=TaiwanStockStatisticsOfOrderBookAndTrade, start_date=2021-01-07
+- Columns: Time (str), TotalBuyOrder (str), TotalBuyVolume (int64), TotalSellOrder (int64), TotalSellVolume (int64), TotalDealOrder (int64), TotalDealVolume (int64), TotalDealMoney (int64), date (str)
+- Note: Single day per request. Cumulative trades exclude odd-lot, block, after-hours fixed-price, auction and tender trades, so the closing total is slightly lower than the daily market volume. Interval: 1 min until 2011-01-14, 15 s from 2011-01-17, 10 s from 2014-02-24, 5 s from 2014-12-29.
+
+### TaiwanVariousIndicators5Seconds (台股加權指數)
+- Tier: Free
+- Data range: 2005-01-01 ~ now
+- Params: dataset=TaiwanVariousIndicators5Seconds, start_date=2020-07-01
+- Columns: date (str), TAIEX (float64)
+- Note: Single day per request.
+
+### TaiwanStockDayTrading (當日沖銷交易標的及成交量值)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2014-01-01 ~ now
+- Update: target list & BuyAfterSale marker available pre-market same day; volume/value (Volume/BuyAmount/SellAmount) updated after close ~21:30
+- BuyAfterSale: ＊ = sell-first-then-buy suspended (intraday buy-first-then-sell only; day trading still allowed); Y / blank = both directions allowed
+- BuyAfterSale note: exchange-level eligibility for the security (whether the stock is on the suspended-sell-first list); actually being able to sell first also depends on the investor's account eligibility (required sell-first agreements, trading quota) and the broker's current securities-lending inventory, so a broker showing "buy-first-only" while this field shows both is normal
+- Params: dataset=TaiwanStockDayTrading, data_id=2330, start_date=2020-04-02, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockDayTrading, start_date=2020-04-06 (不帶 data_id，取得該日所有股票資料)
+- Columns: stock_id (str), date (str), BuyAfterSale (str), Volume (int64), BuyAmount (int64), SellAmount (int64)
+
+### TaiwanStockTotalReturnIndex (加權、櫃買報酬指數)
+- Tier: Free
+- Data range: 2003-01-01 ~ now
+- Update: Mon-Fri 16:50
+- Params: dataset=TaiwanStockTotalReturnIndex, data_id=TAIEX, start_date=2020-04-02, end_date=2020-04-12
+- Columns: price (float64), stock_id (str), date (str)
+- data_id values: TAIEX, TPEx
+
+### TaiwanStock10Year (台灣個股十年線資料表)
+- Tier: Backer/Sponsor
+- Data range: 2011-01-24 ~ now
+- Update: Mon-Fri 20:00
+- Params: dataset=TaiwanStock10Year, data_id=2330, start_date=2020-04-02, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStock10Year, start_date=2020-04-06 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), close (float64)
+
+### TaiwanStockKBar (台股分K資料表)
+- Tier: Sponsor
+- Data range: 2019-01-01 ~ now
+- Update: Mon-Fri 15:50
+- Params: dataset=TaiwanStockKBar, data_id=2330, start_date=2023-09-22
+- Columns: date (str), minute (str), stock_id (str), open (float64), high (float64), low (float64), close (float64), volume (float32)
+- Note: Single day per request.
+- Note: `volume` keeps each market's native trading unit — lots (1 lot = 1,000 shares) for TWSE/TPEX stocks, shares for emerging-board (興櫃) stocks — the same rule as TaiwanStockPriceTick. Determine the market from TaiwanStockInfo by taking the row with the latest `date` per `stock_id`.
+- Note: the TAIEX index minute K is in this same dataset — use data_id=TAIEX. Range 2005-01-03 ~ now (longer than the 2019-01-01 start for individual stocks), 271 rows per trading day covering 09:00:00-13:30:00, one row per minute; `volume` is always 0 because an index has no trading volume. Make-up trading Saturdays are covered.
+- Missing dates: 2019-02-20, 2019-02-21, 2019-02-22 have no individual-stock minute K (only TAIEX is available); on 2019-05-16 only a small number of ETFs have data.
+- Bulk download (sponsorpro): `GET /api/v4/storage_objects?dataset=TaiwanStockKBar&date=2026-01-02` returns whole-day parquet via signed URL, ignores data_id. Available from 2019-01-02 onwards. Python SDK: `api.taiwan_stock_kbar(date='2026-01-02', use_object=True)`.
+
+### TaiwanStockWeekPrice (台股週K資料表)
+- Tier: Backer/Sponsor
+- Data range: 2000-01-01 ~ now
+- Update: Mon-Fri 17:30
+- Params: dataset=TaiwanStockWeekPrice, data_id=2330, start_date=2020-04-02, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockWeekPrice, start_date=2020-04-06 (不帶 data_id，取得該日所有股票資料)
+- Columns: stock_id (str), yweek (str), max (float64), min (float64), trading_volume (int64), trading_money (int64), trading_turnover (float32), date (str), close (float64), open (float64), spread (float64)
+
+### TaiwanStockMonthPrice (台股月K資料表)
+- Tier: Backer/Sponsor
+- Data range: 2000-01-01 ~ now
+- Update: Mon-Fri 17:30
+- Params: dataset=TaiwanStockMonthPrice, data_id=2330, start_date=2020-04-02, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockMonthPrice, start_date=2020-04-06 (不帶 data_id，取得該日所有股票資料)
+- Columns: stock_id (str), ymonth (str), max (float64), min (float64), trading_volume (int64), trading_money (int64), trading_turnover (float32), date (str), close (float64), open (float64), spread (float64)
+
+### TaiwanStockEvery5SecondsIndex (每5秒指數統計)
+- Tier: Backer/Sponsor
+- Data range: 2005-01-03 ~ now
+- Params: dataset=TaiwanStockEvery5SecondsIndex, start_date=2025-05-09
+- Columns: date (str), time (str), stock_id (str), price (float), kind (str)
+- Note: Single day per request. 13:30:00 is the official closing index for both TWSE and TPEx. TPEx chemical index is Chemical for the full history (ChemicalEngineering was merged into Chemical on 2026-10-04). 2017-05-08 TPEx has no 09:00:00 point.
+
+### TaiwanStockSuspended (台股暫停交易公告)
+- Tier: Backer/Sponsor
+- Data range: 2011-10-06 ~ now
+- Params: dataset=TaiwanStockSuspended, start_date=2017-04-01, end_date=2025-01-01
+- Columns: stock_id (str), date (str), suspension_time (str), resumption_date (str), resumption_time (str)
+
+### TaiwanStockDayTradingSuspension (暫停先賣後買當沖預告表)
+- Tier: Backer/Sponsor
+- Data range: 2014-06-01 ~ now
+- Params: dataset=TaiwanStockDayTradingSuspension, start_date=2024-12-01, end_date=2025-01-01
+- Columns: stock_id (str), date (str), end_date (str), reason (str)
+
+### TaiwanStockPriceLimit (每日漲跌停價)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2000-01-01 ~ now
+- Update: Mon-Fri 18:00
+- Params: dataset=TaiwanStockPriceLimit, data_id=2330, start_date=2023-01-01
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockPriceLimit, start_date=2023-01-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), reference_price (float64), limit_up (float64), limit_down (float64)
+- Note: limit_up/limit_down 為 0 表示無漲跌幅限制（槓桿型 ETF 如 00631L、反向型 ETF 如 00632R、興櫃股票）
+
+---
+
+## Taiwan Market - Chip / Institutional (25 datasets)
+
+### TaiwanStockMarginPurchaseShortSale (個股融資融劵表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2001-01-01 ~ now
+- Update: Mon-Fri 21:00
+- Params: dataset=TaiwanStockMarginPurchaseShortSale, data_id=2330, start_date=2020-04-02, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockMarginPurchaseShortSale, start_date=2020-04-02 (不帶 data_id，取得該日所有股票資料)
+- Columns: date, stock_id, MarginPurchaseBuy, MarginPurchaseCashRepayment, MarginPurchaseLimit, MarginPurchaseSell, MarginPurchaseTodayBalance, MarginPurchaseYesterdayBalance, Note, OffsetLoanAndShort, ShortSaleBuy, ShortSaleCashRepayment, ShortSaleLimit, ShortSaleSell, ShortSaleTodayBalance, ShortSaleYesterdayBalance
+
+### TaiwanStockTotalMarginPurchaseShortSale (整體市場融資融劵表)
+- Tier: Free
+- Data range: 2001-01-01 ~ now
+- Update: Mon-Fri 21:00
+- Params: dataset=TaiwanStockTotalMarginPurchaseShortSale, start_date=2020-04-01, end_date=2020-04-12
+- Columns: TodayBalance, YesBalance, buy, date, name, Return, sell
+
+### TaiwanStockInstitutionalInvestorsBuySell (個股三大法人買賣表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2005-01-01 ~ now
+- Coverage: 上市 (TWSE), 上櫃 (TPEx), 興櫃 (Emerging) 三市場，以 stock_id 區分
+- Update: Mon-Fri 20:00
+- Params: dataset=TaiwanStockInstitutionalInvestorsBuySell, data_id=2330, start_date=2020-04-01, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockInstitutionalInvestorsBuySell, start_date=2020-04-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: date, stock_id, buy, name, sell
+- name values: Foreign_Investor (all eras), Investment_Trust (all eras), Dealer (combined; pre-2014-12-01 and Emerging), Dealer_self / Dealer_Hedging (TWSE/TPEx from 2014-12-01), Foreign_Dealer_Self (from 2017-12-18 TWSE / 2018-01-15 TPEx; TPEx rows between 2017-12-18 and 2018-01-12 exist with buy/sell always 0)
+- Note: a category has NO row in eras where it did not exist — TWSE/TPEx stocks after 2014-12-01 have no Dealer row (values are in Dealer_self + Dealer_Hedging). For a continuous dealer total, sum Dealer + Dealer_self + Dealer_Hedging. Emerging market publishes net only, so buy/sell are reconstructed from net and one side is always 0.
+
+### TaiwanStockInstitutionalInvestorsBuySellWide (個股三大法人買賣表（寬表）)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Same data as TaiwanStockInstitutionalInvestorsBuySell but wide format: one row per (date, stock_id), each institutional investor's buy/sell as its own column
+- Data range: 2005-01-01 ~ now
+- Coverage: 上市 (TWSE), 上櫃 (TPEx), 興櫃 (Emerging) 三市場，以 stock_id 區分
+- Update: Mon-Fri 20:00
+- Params: dataset=TaiwanStockInstitutionalInvestorsBuySellWide, data_id=2330, start_date=2020-04-01, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockInstitutionalInvestorsBuySellWide, start_date=2020-04-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: date, stock_id, Foreign_Investor_buy, Foreign_Investor_sell, Foreign_Dealer_Self_buy, Foreign_Dealer_Self_sell, Investment_Trust_buy, Investment_Trust_sell, Dealer_buy, Dealer_sell, Dealer_self_buy, Dealer_self_sell, Dealer_Hedging_buy, Dealer_Hedging_sell
+- Note: covers all historical investor categories; a category is 0 in eras where it did not exist. Dealer (combined) is pre-2014-12-01 (and Emerging); Dealer_self/Dealer_Hedging from 2014-12-01; Foreign_Dealer_Self from 2017-12-18 (TWSE) / 2018-01-15 (TPEx); before that Foreign_Investor is the foreign total. Dealer_buy/Dealer_sell are therefore always 0 for TWSE/TPEx stocks after 2014-12-01 — this is expected, not missing data. For a continuous dealer total, sum Dealer + Dealer_self + Dealer_Hedging. Emerging market publishes net only, so its buy/sell are reconstructed from net and one side is always 0.
+
+### TaiwanStockTotalInstitutionalInvestors (整體三大市場法人買賣表)
+- Tier: Free
+- Data range: 2004-04-01 ~ now
+- Update: Mon-Fri 15:00
+- Params: dataset=TaiwanStockTotalInstitutionalInvestors, start_date=2020-04-01, end_date=2020-04-12
+- Columns: buy, date, name, sell
+
+### TaiwanStockShareholding (外資持股表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2004-02-01 ~ now
+- Update: Mon-Fri 21:00
+- Params: dataset=TaiwanStockShareholding, data_id=2330, start_date=2020-04-01, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockShareholding, start_date=2020-04-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: date, stock_id, stock_name, InternationalCode, ForeignInvestmentRemainingShares, ForeignInvestmentShares, ForeignInvestmentRemainRatio, ForeignInvestmentSharesRatio, ForeignInvestmentUpperLimitRatio, ChineseInvestmentUpperLimitRatio, NumberOfSharesIssued, RecentlyDeclareDate, note
+
+### TaiwanStockHoldingSharesPer (股權持股分級表)
+- Tier: Backer/Sponsor
+- Data range: 2010-01-29 ~ now
+- Params: dataset=TaiwanStockHoldingSharesPer, data_id=2330, start_date=2020-04-01, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockHoldingSharesPer, start_date=2020-04-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: date, stock_id, HoldingSharesLevel, people, percent, unit
+
+### TaiwanStockSecuritiesLending (借券成交明細)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2001-05-01 ~ now
+- Update: Mon-Fri 15:00
+- Params: dataset=TaiwanStockSecuritiesLending, data_id=2330, start_date=2020-04-01, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockSecuritiesLending, start_date=2020-04-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: date, stock_id, transaction_type, volume, fee_rate, close, original_return_date, original_lending_period
+
+### TaiwanStockMarginShortSaleSuspension (暫停融券賣出表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2015-01-01 ~ now
+- Update: Mon-Fri 21:00
+- Params: dataset=TaiwanStockMarginShortSaleSuspension, data_id=0050, start_date=2015-01-01, end_date=2015-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockMarginShortSaleSuspension, start_date=2015-01-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: stock_id, date, end_date, reason
+
+### TaiwanDailyShortSaleBalances (信用額度總量管制餘額表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2005-07-01 ~ now
+- Update: Mon-Fri 21:00
+- Params: dataset=TaiwanDailyShortSaleBalances, data_id=2330, start_date=2020-04-01, end_date=2020-04-12
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanDailyShortSaleBalances, start_date=2020-04-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: stock_id, MarginShortSalesPreviousDayBalance, MarginShortSalesShortSales, MarginShortSalesShortCovering, MarginShortSalesStockRedemption, MarginShortSalesCurrentDayBalance, MarginShortSalesQuota, SBLShortSalesPreviousDayBalance, SBLShortSalesShortSales, SBLShortSalesReturns, SBLShortSalesAdjustments, SBLShortSalesCurrentDayBalance, SBLShortSalesQuota, SBLShortSalesShortCovering, date
+
+### TaiwanSecuritiesTraderInfo (證券商資訊表)
+- Tier: Free
+- Params: dataset=TaiwanSecuritiesTraderInfo
+- Columns: securities_trader_id, securities_trader, date, address, phone
+
+### TaiwanStockTradingDailyReport (台股分點資料表)
+- Tier: Sponsor
+- Data range: 2021-06-30 ~ now
+- Update: Mon-Fri 21:00
+- Endpoint: `GET https://api.finmindtrade.com/api/v4/taiwan_stock_trading_daily_report` (專屬 endpoint，不走 /api/v4/data)
+- Params (by stock): data_id=2330, date=2022-06-16
+- Params (by broker): securities_trader_id=1020, date=2022-06-16
+- Columns: securities_trader, price, buy, sell, securities_trader_id, stock_id, date
+- Note: Single day per request, only `date` (no start_date/end_date).
+- Note: Some data is missing on the following dates: 2022-10-31~2022-11-03, 2023-01-11~2023-01-17.
+- Note: For emerging-board (興櫃) stocks, the recommending securities dealer (market maker; securities_trader_id ends with `T`) quotes two-way across many price levels, so that branch row's price shows 0 (buy/sell share counts are still correct). This is normal for emerging stocks, not missing data; listed (TWSE)/OTC (TPEX) stocks are unaffected.
+- Known limitation: for the same stock and day, total branch buy and total branch sell may not be equal. This comes from the source data (FinMind matches the source), occurs for a few dozen stocks per trading day (almost all listed/TWSE), and is unrelated to block trades (this dataset excludes block trades). Do not balance or fill the difference; for regular trading volume use TaiwanStockPrice.Trading_Volume minus TaiwanStockBlockTrade volume.
+- Known limitation: for emerging-board (興櫃) stocks, regular-branch (excluding recommending securities dealers) buy value + sell value may not equal TaiwanStockPrice.Trading_money. Lower = trades between two recommending dealers (not shown in regular branches; shares = dealers' buy + sell - daily volume). Higher = off-system negotiated trades (系統外議價交易), which are in the daily broker report but not in the daily trading value. FinMind matches the TPEx source; not missing data.
+- Bulk download (sponsorpro): `GET /api/v4/storage_objects?dataset=TaiwanStockTradingDailyReport&date=2022-06-16` returns whole-day parquet via signed URL, ignores data_id / securities_trader_id. Python SDK: `api.taiwan_stock_trading_daily_report(date='2022-06-16', use_object=True)`.
+
+### TaiwanStockWarrantTradingDailyReport (台股權證分點資料表)
+- Tier: Sponsor
+- Data range: 2023-06-21 ~ now
+- Params (by stock): dataset=TaiwanStockWarrantTradingDailyReport, data_id=084655, start_date=2023-06-21
+- Params (by broker): dataset=TaiwanStockWarrantTradingDailyReport, data_id=5920, start_date=2023-06-21
+- Columns: securities_trader, price, buy, sell, securities_trader_id, stock_id, date
+- Bulk download (sponsorpro): `GET /api/v4/storage_objects?dataset=TaiwanStockWarrantTradingDailyReport&date=2023-06-21` returns whole-day parquet via signed URL, ignores data_id / securities_trader_id. Python SDK: `api.taiwan_stock_warrant_trading_daily_report(date='2023-06-21', use_object=True)`.
+
+### TaiwanStockGovernmentBankBuySell (台股八大行庫買賣表)
+- Tier: Sponsor
+- Data range: 2021-06-30 ~ now
+- Update: Mon-Fri 23:30
+- Params: dataset=TaiwanStockGovernmentBankBuySell, start_date=2023-01-17
+- Columns: date, stock_id, buy_amount, sell_amount, buy, sell, bank_name
+- Note: Some data is missing on the following dates: 2023-01-11 (no data for the entire day), 2023-03-16, 2023-04-06, 2023-10-25, 2025-03-26.
+
+### TaiwanTotalExchangeMarginMaintenance (台灣大盤融資維持率)
+- Tier: Backer/Sponsor
+- Data range: 2001-01-05 ~ now
+- Update: Mon-Fri 21:00
+- Params: dataset=TaiwanTotalExchangeMarginMaintenance, start_date=2024-04-01, end_date=2024-05-01
+- Columns: date, TotalExchangeMarginMaintenance
+
+### TaiwanStockTradingDailyReportSecIdAgg (當日卷商分點統計表)
+- Tier: Sponsor
+- Data range: 2021-06-30 ~ now
+- Update: Mon-Fri 21:00
+- Endpoint: `GET https://api.finmindtrade.com/api/v4/taiwan_stock_trading_daily_report_secid_agg` (專屬 endpoint，不走 /api/v4/data)
+- Params: data_id=2330, start_date=2024-07-01, end_date=2024-07-15
+- Columns: securities_trader, securities_trader_id, stock_id, date, buy_volume, sell_volume, buy_price, sell_price
+
+### TaiwanStockBlockTradingDailyReport (鉅額交易買賣日報表)
+- Tier: Sponsor
+- Data range: 2026-04-28 ~ now
+- Update: Mon-Fri 21:00
+- Params: dataset=TaiwanStockBlockTradingDailyReport, start_date=2026-04-28
+- Columns: securities_trader, price, buy, sell, trade_type, securities_trader_id, stock_id, date
+
+### TaiwanStockBlockTrade (鉅額交易日成交資訊)
+- Tier: Sponsor
+- Data range: 2005-04-04 ~ now
+- Params: dataset=TaiwanStockBlockTrade, data_id=2330, start_date=2026-04-01, end_date=2026-04-30
+- Params (all stocks for one day): dataset=TaiwanStockBlockTrade, start_date=2026-04-24, end_date=2026-04-24
+- Columns: date, stock_id, trade_type, price, volume, trading_money
+
+### TaiwanStockLoanCollateralBalance (借貸款項擔保品餘額表)
+- Tier: Sponsor
+- Data range: 2006-10-02 ~ now
+- Params: dataset=TaiwanStockLoanCollateralBalance, data_id=2330, start_date=2025-01-02, end_date=2025-01-31
+- Params (all stocks for one day): dataset=TaiwanStockLoanCollateralBalance, start_date=2025-01-02
+- Columns: date, stock_id, market, MarginPreviousDayBalance, MarginBuy, MarginSell, MarginCashRedemption, MarginCurrentDayBalance, MarginNextDayQuota, SecuritiesFirmLoanPreviousDayBalance, SecuritiesFirmLoanBuy, SecuritiesFirmLoanSell, SecuritiesFirmLoanCashRedemption, SecuritiesFirmLoanReplacement, SecuritiesFirmLoanCurrentDayBalance, SecuritiesFirmLoanNextDayQuota, UnrestrictedLoanPreviousDayBalance, UnrestrictedLoanBuy, UnrestrictedLoanSell, UnrestrictedLoanCashRedemption, UnrestrictedLoanReplacement, UnrestrictedLoanCurrentDayBalance, UnrestrictedLoanNextDayQuota, SecuritiesFinanceSecuredLoanPreviousDayBalance, SecuritiesFinanceSecuredLoanBuy, SecuritiesFinanceSecuredLoanSell, SecuritiesFinanceSecuredLoanCashRedemption, SecuritiesFinanceSecuredLoanReplacement, SecuritiesFinanceSecuredLoanCurrentDayBalance, SecuritiesFinanceSecuredLoanNextDayQuota, SettlementMarginPreviousDayBalance, SettlementMarginBuy, SettlementMarginSell, SettlementMarginCashRedemption, SettlementMarginReplacement, SettlementMarginCurrentDayBalance, SettlementMarginNextDayQuota
+
+### TaiwanStockActiveETFInfo (主動式ETF清單)
+- Tier: Free
+- Params: dataset=TaiwanStockActiveETFInfo
+- Columns: date (str), stock_id (str), stock_name (str), category (str), type (str)
+- Note: List / basic info of Taiwan-listed active ETFs (TWSE-listed + TPEx OTC). category is the ETF category (domestic / foreign); type is the market type (twse / tpex). No data_id needed — the whole list is returned.
+
+### TaiwanStockActiveETFHolding (主動式ETF每日持股明細)
+- Tier: Sponsor
+- Data range: 2025-05-05 ~ now
+- Params: dataset=TaiwanStockActiveETFHolding, data_id=00980A, start_date=2025-05-05, end_date=2025-05-31
+- Params (all active ETFs for one day): dataset=TaiwanStockActiveETFHolding, start_date=2025-05-05
+- Columns: date, stock_id (ETF id), component_stock_id (constituent), component_stock_name, asset_type, shares, weight, market_value, currency
+- Note: buy/sell holdings can be derived by differencing consecutive trading days; start date differs per ETF
+
+### TaiwanStockActiveETFHoldingChange (主動式ETF每日持股異動（買賣）)
+- Tier: Sponsor
+- Data range: 2025-05-05 ~ now
+- Params: dataset=TaiwanStockActiveETFHoldingChange, data_id=00980A, start_date=2025-05-05, end_date=2025-05-31
+- Params (all active ETFs for one day): dataset=TaiwanStockActiveETFHoldingChange, start_date=2025-05-06
+- Columns: date, stock_id (ETF id), component_stock_id (constituent), component_stock_name, buy (integer shares bought that day; increase in constituent shares, 0 if none), sell (integer shares sold that day; decrease in constituent shares as a positive value, 0 if none); exactly one of buy/sell is non-zero per row
+- Derived from TaiwanStockActiveETFHolding by differencing consecutive trading days
+- Note: creations/redemptions scale constituent shares proportionally and are included in buy/sell, so buy/sell reflect the change in held shares and are not the manager's net discretionary buy/sell
+
+### TaiwanStockIndustryChainMoneyFlow (台股產業鏈資金流向)
+- Tier: Sponsor
+- Data range: 1992-01-04 ~ now
+- Params: dataset=TaiwanStockIndustryChainMoneyFlow, start_date=2026-07-17 (no data_id; one day per request - do NOT pass end_date)
+- Columns: date, industry (industry chain), sub_industry (empty string = industry-chain total row), stock_count, trading_volume, trading_money, trading_money_pct (% of whole-market individual-stock trading money; ETF/ETN/beneficiary certificates/TDR excluded from the denominator)
+- Derived daily from TaiwanStockPrice aggregated by TaiwanStockIndustryChain (industry / sub_industry)
+- Note: industry-chain total rows count each stock once and do NOT equal the sum of sub-industry rows (one stock can belong to multiple sub-industries); one stock can belong to multiple chains, so percentages across chains sum to more than 100%; historical dates use the current industry-chain classification
+
+### TaiwanStockMarginMaintenance (個股融資維持率)
+- Tier: Sponsor
+- Data range: 2001-01-05 ~ now (TPEx / OTC stocks from 2007-01-04)
+- Update: Mon-Sat 22:30
+- Params: dataset=TaiwanStockMarginMaintenance, data_id=2330, start_date=2026-07-22, end_date=2026-07-28
+- Params (all stocks for one day): dataset=TaiwanStockMarginMaintenance, start_date=2026-07-28
+- Columns: date, stock_id, margin_balance (margin purchase balance in lots), margin_cost (margin cost line, estimated moving weighted average cost of the margin position), margin_ratio (margin purchase ratio applied, 0.6 / 0.5), margin_maintenance (margin maintenance ratio in %, e.g. 156.1)
+- Formula: margin_maintenance = closing price / (margin_cost * margin_ratio) * 100
+- Formula (margin_cost, rolled forward day by day): carried_position = max(today's margin balance - today's margin purchase, 0); margin_cost = (previous margin_cost * carried_position + today's closing price * today's margin purchase) / (carried_position + today's margin purchase). Balance and purchase are in lots, taken from the individual stock margin purchase / short sale table; the daily purchase is used as published rather than derived from the change in balance, so a balance jump caused by a share-count event is not mistaken for buying
+- Formula (boundary cases): if the whole balance is new buying that day (carried position 0) the cost line equals that day's closing price; if the margin balance drops to zero the position is treated as closed and the cost line resets, restarting from the closing price when a balance appears again; on a day with no trade (suspended / no volume) the previous cost line is carried forward and no row is produced
+- Formula (event adjustment): on an event day the previous cost line is adjusted before that day's purchases are applied. Stock splits, par value changes, capital reductions and stock dividends are scaled by the reference price ratio; on an ex-dividend date the cash dividend per share is deducted from the cost line
+- Coverage: all TWSE-listed and TPEx-listed instruments with a margin purchase balance, including ETFs / ETNs / beneficiary certificates / depositary receipts; emerging-market stocks have no margin trading and are out of scope. No row is produced for a stock on days when its balance is 0 or it has no trade (suspended / no volume)
+- Note: this dataset is an ESTIMATED indicator. Public disclosure provides only the per-stock margin purchase balance in lots, not the per-stock margin purchase amount, so there is no official ground truth; every service that publishes this indicator estimates it differently and the numbers will not match. Use it as a relative measure of margin pressure, not an exact value
+- Note: margin_ratio always uses the statutory maximum margin purchase ratio (TWSE 60%; TPEx 60% from 2014-11-10, 50% before). Stocks flagged for attention or under disposition may in practice get a lower ratio or have margin trading suspended
+- Note: margin_cost is a nominal value already adjusted for share-count events (splits / par value changes, capital reductions, stock dividends) and with the cash dividend per share deducted on the ex-dividend date; it is not the original purchase price
+
+### TaiwanStockDispositionSecuritiesPeriod (公布處置有價證券表)
+- Tier: Backer/Sponsor
+- Data range: 2001-01-01 ~ now
+- Params: dataset=TaiwanStockDispositionSecuritiesPeriod, data_id=6477, start_date=2025-01-01, end_date=2025-02-01
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockDispositionSecuritiesPeriod, start_date=2025-01-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: date, stock_id, stock_name, disposition_cnt, condition, measure, period_start, period_end
+
+---
+
+## Taiwan Market - Fundamental (12 datasets)
+
+### TaiwanStockFinancialStatements (綜合損益表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 1990-03-01 ~ now
+- Coverage: 上市 (TWSE), 上櫃 (TPEx), 興櫃 (Emerging) 三市場，以 stock_id 區分
+- Params: dataset=TaiwanStockFinancialStatements, data_id=2330, start_date=2019-01-01
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockFinancialStatements, start_date=2019-01-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), type (str), value (float64), origin_name (str)
+- Caveat (EPS 為單季值，且遇配股／分割會被追溯調整): EPS 是單季數字，各季存放該季財報公布當下的原始值。依 IAS 33，無償配股（股票股利）、股票分割須追溯調整所有列報期間的加權平均股數，該季財報會下修先前各季 EPS，但本表不回頭改寫舊值 → 同一年度內各季 EPS 股數基準不一致，直接相加會對不上財報累計 EPS。例：3081 於 2026-07-15 除權配股票股利 1 元（無償配股 10%），本表 2026 Q1 EPS=3.44（原始值）、Q2 EPS=4.62（已追溯調整），相加 8.06，但財報上半年累計 EPS=7.75（Q1 追溯調整後為 3.44÷1.1=3.13，3.13+4.62=7.75）。跨季合計請改用 IncomeAfterTaxes 相加後除以同一加權平均股數；可用 TaiwanStockDividend 的 StockEarningsDistribution 欄位判斷區間內是否配股。
+
+### TaiwanStockBalanceSheet (資產負債表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2011-12-01 ~ now
+- Coverage: 上市 (TWSE), 上櫃 (TPEx), 興櫃 (Emerging) 三市場，以 stock_id 區分
+- Params: dataset=TaiwanStockBalanceSheet, data_id=2330, start_date=2019-03-31
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockBalanceSheet, start_date=2019-03-31 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), type (str), value (float64), origin_name (str)
+
+### TaiwanStockCashFlowsStatement (現金流量表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2008-06-01 ~ now
+- Coverage: 上市 (TWSE), 上櫃 (TPEx), 興櫃 (Emerging) 三市場，以 stock_id 區分
+- Params: dataset=TaiwanStockCashFlowsStatement, data_id=2330, start_date=2019-03-31
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockCashFlowsStatement, start_date=2019-03-31 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), type (str), value (float64), origin_name (str)
+
+### TaiwanStockDividend (股利政策表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2005-05-01 ~ now
+- Params: dataset=TaiwanStockDividend, data_id=2330, start_date=2019-03-31
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockDividend, start_date=2019-03-31 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), year (str), StockEarningsDistribution (float64), StockStatutorySurplus (float64), StockExDividendTradingDate (str), TotalEmployeeStockDividend (float64), TotalEmployeeStockDividendAmount (float64), RatioOfEmployeeStockDividendOfTotal (float64), RatioOfEmployeeStockDividend (float64), CashEarningsDistribution (float64), CashStatutorySurplus (float64), CashExDividendTradingDate (str), CashDividendPaymentDate (str), TotalEmployeeCashDividend (float64), TotalNumberOfCashCapitalIncrease (float64), CashIncreaseSubscriptionRate (float64), CashIncreaseSubscriptionpRrice (float64), RemunerationOfDirectorsAndSupervisors (float64), ParticipateDistributionOfTotalShares (float64), AnnouncementDate (str), AnnouncementTime (str)
+
+### TaiwanStockDividendResult (除權除息結果表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2003-05-01 ~ now
+- Params: dataset=TaiwanStockDividendResult, data_id=2330, start_date=2019-03-31
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockDividendResult, start_date=2019-03-31 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), before_price (float32), after_price (float32), stock_and_cache_dividend (float32), stock_or_cache_dividend (str), max_price (float32), min_price (float32), open_price (float32), reference_price (float32)
+
+### TaiwanStockMonthRevenue (月營收表)
+- Tier: Free (with data_id) / Backer/Sponsor (all stocks by start_date only)
+- Data range: 2002-02-01 ~ now
+- Coverage: 上市 (TWSE), 上櫃 (TPEx), 興櫃 (Emerging) 三市場，以 stock_id 區分
+- Params: dataset=TaiwanStockMonthRevenue, data_id=2330, start_date=2019-03-31
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockMonthRevenue, start_date=2019-03-31 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), country (str), revenue (int64), revenue_month (int64), revenue_year (int64), create_time (str, 建立時間 YYYY-MM-DD; empty for older historical rows)
+- Known limitation: create_time has only been recorded since 2026-04-21 (empty string before that), and it is the date the row entered the FinMind database, not the company's official announcement time; FinMind collects monthly revenue several times a day, so the gap should be negligible. Rows written on 2026-04-21 all carry create_time=2026-04-21 as the column's initial value.
+
+### TaiwanStockCapitalReductionReferencePrice (減資恢復買賣參考價格)
+- Tier: Free
+- Data range: 2011-01-01 ~ now
+- Params: dataset=TaiwanStockCapitalReductionReferencePrice, data_id=2327, start_date=2010-01-01 (data_id is optional)
+- Columns: date (str), stock_id (str), ClosingPriceonTheLastTradingDay (float), PostReductionReferencePrice (float), LimitUp (float), LimitDown (float), OpeningReferencePrice (float), ExrightReferencePrice (float), ReasonforCapitalReduction (str)
+- Note: data_id (stock id) is optional - the date range alone returns all stocks in that range, but this whole-market query requires Backer/Sponsor; free members should pass data_id.
+
+### TaiwanStockMarketValue (台灣股價市值表)
+- Tier: Backer/Sponsor
+- Data range: 2004-01-01 ~ now
+- Update: Mon-Fri 23:30
+- Params: dataset=TaiwanStockMarketValue, data_id=2330, start_date=2023-01-01, end_date=2024-01-01
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockMarketValue, start_date=2023-01-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: date (str), stock_id (str), market_value (int64)
+
+### TaiwanStockDelisting (台灣股票下市櫃表)
+- Tier: Free
+- Data range: 2001-01-01 ~ now
+- Params: dataset=TaiwanStockDelisting
+- Columns: date (str), stock_id (str), stock_name (str)
+
+### TaiwanStockMarketValueWeight (台股市值比重表)
+- Tier: Backer/Sponsor
+- Data range: 2024-10-30 ~ now
+- Params: dataset=TaiwanStockMarketValueWeight, data_id=2330, start_date=2024-01-01, end_date=2025-01-01
+- Params (all stocks, Backer/Sponsor): dataset=TaiwanStockMarketValueWeight, start_date=2024-01-01 (不帶 data_id，取得該日所有股票資料)
+- Columns: rank (int64), stock_id (str), stock_name (str), weight_per (float32), date (str), type (str: twse/tpex)
+
+### TaiwanStockSplitPrice (台股分割後參考價)
+- Tier: Free
+- Params: dataset=TaiwanStockSplitPrice
+- Columns: date (str), stock_id (str), type (str: 分割/反分割), before_price (float), after_price (float), max_price (float), min_price (float), open_price (float)
+
+### TaiwanStockParValueChange (台灣股票變更面額恢復買賣參考價格)
+- Tier: Free
+- Data range: 2020-01-01 ~ now
+- Params: dataset=TaiwanStockParValueChange, start_date=2020-01-01
+- Columns: date (str), stock_id (str), stock_name (str), before_close (float64), after_ref_close (float64), after_ref_max (float64), after_ref_min (float64), after_ref_open (float64)
+
+---
+
+## Taiwan Market - Derivative (19 datasets)
+
+### TaiwanFutOptDailyInfo (期貨、選擇權日成交資訊總覽)
+- Tier: Free
+- Params: dataset=TaiwanFutOptDailyInfo
+- Columns: code, type, name
+
+### TaiwanFuturesDaily (期貨日成交資訊)
+- Tier: Free (with data_id) / Backer/Sponsor (all)
+- Data range: 1998-07-01 ~ now
+- Params: dataset=TaiwanFuturesDaily, data_id=TX, start_date=2020-04-01, end_date=2020-04-12
+- Params (all, Backer/Sponsor): dataset=TaiwanFuturesDaily, start_date=2020-04-01 (不帶 data_id，取得該日所有期貨資料)
+- Columns: date, futures_id, contract_date, open, max, min, close, spread, spread_per, volume, settlement_price, open_interest, trading_session
+
+### TaiwanFuturesKBar
+- Tier: Sponsor
+- Data range: 2011-01-03 ~ now
+- Update: Monday-Friday 16:30
+- Params: dataset=TaiwanFuturesKBar, data_id=TX, start_date=2024-01-02 (single day only; data_id is required)
+- Bulk download (sponsorpro): `GET /api/v4/storage_objects?dataset=TaiwanFuturesKBar&date=2024-01-02` returns whole-day parquet (all futures products) via signed URL. Available from 2011-01-03 onwards.
+- Columns: date, futures_id, contract_date, minute, open, high, low, close, volume
+
+### TaiwanOptionDaily (選擇權日成交資訊)
+- Tier: Free (with data_id) / Backer/Sponsor (all)
+- Data range: 2001-12-01 ~ now
+- Params: dataset=TaiwanOptionDaily, data_id=TXO, start_date=2020-04-01, end_date=2020-04-02
+- Params (all, Backer/Sponsor): dataset=TaiwanOptionDaily, start_date=2020-04-01 (不帶 data_id，取得該日所有選擇權資料)
+- Columns: date, option_id, contract_date, strike_price, call_put, open, max, min, close, volume, settlement_price, open_interest, trading_session
+
+### TaiwanFuturesTick (期貨交易明細表)
+- Tier: Backer/Sponsor
+- Data range: 2011-01-03 ~ now
+- Params: dataset=TaiwanFuturesTick, data_id=MTX, start_date=2020-04-01
+- Columns: contract_date, date, futures_id, price, volume
+- Note: Single day per request. data_id is required; for all futures products of a day use the bulk download below.
+- Volume convention: tick volume is double-sided (each matched trade records both buy and sell side once), so summed tick volume is ~2x the single-side volume in TaiwanFuturesDaily; spread/combination orders have two legs, so ~4x.
+- Volume reconciliation per contract month (same session): sum(volume of outright rows for the month) + sum(volume of spread rows containing the month)/2 = 2 x TaiwanFuturesDaily volume of the month - 2 x negotiated block-trade lots of the month. A spread row's volume is exactly 4x the spread contract's daily volume. Negotiated block trades (TAIFEX Market Data > Daily Market Report > Block Trade > Negotiation) are not in tick data but are in daily volume; they cluster around settlement-week rollovers and explain tick volume falling short of 2x daily there. Regular-session block trades belong to position, after-hours ones to that trading day's after_market.
+- Trading-day attribution: the after-hours (night) session is attributed to the next business day (TAIFEX rule). In a tick file, 00:00-05:00 ticks belong to trading day D's after_market in TaiwanFuturesDaily; 08:45-13:45 to day D's regular session; 15:00-24:00 to the next trading day's after_market.
+- Bulk download (sponsorpro): `GET /api/v4/storage_objects?dataset=TaiwanFuturesTick&date=2026-01-02` returns whole-day parquet via signed URL, ignores data_id. Available from 2011-01-03 onwards. Python SDK: `api.taiwan_futures_tick(date='2026-01-02', use_object=True)`.
+
+### TaiwanFuturesSpreadTick (期貨價差每筆成交資料)
+- Tier: Sponsor
+- Data range: 2026-04-27 ~ now (accumulated daily since launch)
+- Params: dataset=TaiwanFuturesSpreadTick, data_id=CAF, start_date=2026-06-09
+- Columns: contract_date, date, time, futures_id, price, volume, near_price, far_price, spread_to_spread
+- Note: Futures calendar spread (near/far month) per-trade data. data_id is the spread product code (e.g. CAF). date and time are separate columns (date e.g. 2026-06-09, time e.g. 08:45:03). contract_date holds both legs (e.g. 202606/202607). price is the spread price (can be negative). spread_to_spread: 1 if spread-to-spread deal, else 0. Single day per request. Python SDK: `api.taiwan_futures_spread_tick(futures_id='CAF', date='2026-06-09')`.
+
+### TaiwanOptionTick (選擇權交易明細表)
+- Tier: Backer/Sponsor
+- Data range: 2011-01-03 ~ now
+- Params: dataset=TaiwanOptionTick, data_id=OCO, start_date=2020-04-01
+- Columns: ExercisePrice, PutCall, contract_date, date, option_id, price, volume
+- Note: Single day per request. data_id is required; for all option products of a day use the bulk download below.
+- Bulk download (sponsorpro): `GET /api/v4/storage_objects?dataset=TaiwanOptionTick&date=2026-01-02` returns whole-day parquet via signed URL, ignores data_id. Available from 2011-01-03 onwards (incomplete between 2019-01-16 and 2019-06-30). Python SDK: `api.taiwan_option_tick(date='2026-01-02', use_object=True)`.
+
+### TaiwanFuturesInstitutionalInvestors (期貨三大法人買賣)
+- Tier: Free (with data_id) / Backer/Sponsor (all)
+- Data range: 2018-06-05 ~ now
+- Params: dataset=TaiwanFuturesInstitutionalInvestors, data_id=TX, start_date=2020-04-01, end_date=2020-04-12
+- Params (all, Backer/Sponsor): dataset=TaiwanFuturesInstitutionalInvestors, start_date=2020-04-01 (不帶 data_id，取得該日所有期貨資料)
+- Columns: name, date, institutional_investors, long_deal_volume, long_deal_amount, short_deal_volume, short_deal_amount, long_open_interest_balance_volume, long_open_interest_balance_amount, short_open_interest_balance_volume, short_open_interest_balance_amount
+
+### TaiwanOptionInstitutionalInvestors (選擇權三大法人買賣)
+- Tier: Free (with data_id) / Backer/Sponsor (all)
+- Data range: 2018-06-05 ~ now
+- Params: dataset=TaiwanOptionInstitutionalInvestors, data_id=TXO, start_date=2020-04-01, end_date=2020-04-12
+- Params (all, Backer/Sponsor): dataset=TaiwanOptionInstitutionalInvestors, start_date=2020-04-01 (不帶 data_id，取得該日所有選擇權資料)
+- Columns: name, date, call_put, institutional_investors, long_deal_volume, long_deal_amount, short_deal_volume, short_deal_amount, long_open_interest_balance_volume, long_open_interest_balance_amount, short_open_interest_balance_volume, short_open_interest_balance_amount
+
+### TaiwanFuturesInstitutionalInvestorsAfterHours (期貨夜盤三大法人買賣)
+- Tier: Backer/Sponsor
+- Data range: 2021-10-12 ~ now
+- Params: dataset=TaiwanFuturesInstitutionalInvestorsAfterHours, data_id=TX, start_date=2020-04-01, end_date=2020-04-12
+- Params (all, Backer/Sponsor): dataset=TaiwanFuturesInstitutionalInvestorsAfterHours, start_date=2020-04-01 (不帶 data_id，取得該日所有期貨資料)
+- Columns: futures_id, date, institutional_investors, long_deal_volume, long_deal_amount, short_deal_volume, short_deal_amount
+
+### TaiwanOptionInstitutionalInvestorsAfterHours (選擇權夜盤三大法人買賣)
+- Tier: Backer/Sponsor
+- Data range: 2021-10-12 ~ now
+- Params: dataset=TaiwanOptionInstitutionalInvestorsAfterHours, data_id=TXO, start_date=2020-04-01, end_date=2020-04-12
+- Params (all, Backer/Sponsor): dataset=TaiwanOptionInstitutionalInvestorsAfterHours, start_date=2020-04-01 (不帶 data_id，取得該日所有選擇權資料)
+- Columns: option_id, date, call_put, institutional_investors, long_deal_volume, long_deal_amount, short_deal_volume, short_deal_amount
+
+### TaiwanFuturesDealerTradingVolumeDaily (期貨各卷商每日交易)
+- Tier: Free
+- Data range: 2021-04-01 ~ now
+- Params: dataset=TaiwanFuturesDealerTradingVolumeDaily, data_id=TX, start_date=2020-07-01, end_date=2020-07-12
+- Params (all, Backer/Sponsor): dataset=TaiwanFuturesDealerTradingVolumeDaily, start_date=2020-07-01 (不帶 data_id，取得該日所有期貨資料)
+- Columns: date, dealer_code, dealer_name, futures_id, volume, is_after_hour
+
+### TaiwanOptionDealerTradingVolumeDaily (選擇權各卷商每日交易)
+- Tier: Free
+- Data range: 2021-04-01 ~ now
+- Params: dataset=TaiwanOptionDealerTradingVolumeDaily, data_id=TXO, start_date=2020-07-01, end_date=2020-07-12
+- Params (all, Backer/Sponsor): dataset=TaiwanOptionDealerTradingVolumeDaily, start_date=2020-07-01 (不帶 data_id，取得該日所有選擇權資料)
+- Columns: date, dealer_code, dealer_name, option_id, volume, is_after_hour
+
+### TaiwanFuturesOpenInterestLargeTraders (期貨大額交易人未沖銷部位)
+- Tier: Backer/Sponsor
+- Data range: 1998-07-01 ~ now
+- Params: dataset=TaiwanFuturesOpenInterestLargeTraders, data_id=TJF, start_date=2024-09-01, end_date=2024-09-02
+- Params (all, Backer/Sponsor): dataset=TaiwanFuturesOpenInterestLargeTraders, start_date=2024-09-01 (不帶 data_id，取得該日所有期貨資料)
+- Columns: name, contract_type, buy_top5_trader_open_interest, buy_top5_trader_open_interest_per, buy_top10_trader_open_interest, buy_top10_trader_open_interest_per, sell_top5_trader_open_interest, sell_top5_trader_open_interest_per, sell_top10_trader_open_interest, sell_top10_trader_open_interest_per, market_open_interest, buy_top5_specific_open_interest, buy_top5_specific_open_interest_per, buy_top10_specific_open_interest, buy_top10_specific_open_interest_per, sell_top5_specific_open_interest, sell_top5_specific_open_interest_per, sell_top10_specific_open_interest, sell_top10_specific_open_interest_per, date, futures_id
+
+### TaiwanOptionOpenInterestLargeTraders (選擇權大額交易人未沖銷部位)
+- Tier: Backer/Sponsor
+- Data range: 1998-07-01 ~ now
+- Params: dataset=TaiwanOptionOpenInterestLargeTraders, data_id=CA, start_date=2024-09-01, end_date=2024-09-02
+- Params (all, Backer/Sponsor): dataset=TaiwanOptionOpenInterestLargeTraders, start_date=2024-09-01 (不帶 data_id，取得該日所有選擇權資料)
+- Columns: contract_type, buy_top5_trader_open_interest, buy_top5_trader_open_interest_per, buy_top10_trader_open_interest, buy_top10_trader_open_interest_per, sell_top5_trader_open_interest, sell_top5_trader_open_interest_per, sell_top10_trader_open_interest, sell_top10_trader_open_interest_per, market_open_interest, buy_top5_specific_open_interest, buy_top5_specific_open_interest_per, buy_top10_specific_open_interest, buy_top10_specific_open_interest_per, sell_top5_specific_open_interest, sell_top5_specific_open_interest_per, sell_top10_specific_open_interest, sell_top10_specific_open_interest_per, date, put_call, name, option_id
+
+### TaiwanFuturesSpreadTrading (期貨價差行情表)
+- Tier: Backer/Sponsor
+- Data range: 2007-10-08 ~ now
+- Params: dataset=TaiwanFuturesSpreadTrading, data_id=TX, start_date=2020-04-01, end_date=2020-04-12
+- Columns: date, futures_id, contract_date, open, max, min, close, best_bid, best_ask, historical_max, historical_min, spread_to_spread_volume, spread_to_single_volume, trading_session
+
+### TaiwanFuturesFinalSettlementPrice (期貨最後結算價)
+- Tier: Backer/Sponsor
+- Data range: 1998-01-01 ~ now
+- Params: dataset=TaiwanFuturesFinalSettlementPrice, data_id=TX, start_date=2020-04-01, end_date=2020-04-12
+- Columns: date, contract_month, futures_type, futures_id, futures_name, settlement_price, underlying_code, notional_value
+
+### TaiwanOptionFinalSettlementPrice (選擇權最後結算價)
+- Tier: Backer/Sponsor
+- Data range: 2001-01-01 ~ now
+- Params: dataset=TaiwanOptionFinalSettlementPrice, data_id=TXO, start_date=2020-04-01, end_date=2020-04-12
+- Columns: date, contract_month, option_type, option_id, option_name, settlement_price, underlying_code, notional_value
+
+### TaiwanOptionVix (臺指選擇權波動率指數)
+- Tier: Backer/Sponsor
+- Data range: 2026-03-01 ~ now
+- Update: Mon-Sat 18:00
+- Params: dataset=TaiwanOptionVix, start_date=2026-06-01, end_date=2026-06-02
+- Columns: date (str), time (str), vix (float64)
+
+---
+
+## Taiwan Market - Real-Time (4 datasets)
+
+### taiwan_stock_tick_snapshot (台股即時資訊)
+- Tier: Sponsor
+- Params: dataset=taiwan_stock_tick_snapshot, data_id=2330 (or empty for all)
+- Columns: amount, average_price, buy_price, buy_volume, change_price, change_rate, close, high, low, open, sell_price, sell_volume, total_amount, total_volume, volume, volume_ratio, yesterday_volume, date, stock_id, TickType
+- Index codes (3-digit data_id, 91 indices): besides 4-digit stock IDs, data_id also accepts 3-digit index codes:
+  - Broad market: 001=加權指數(TAIEX), 002=不含金融指數, 003=不含電子指數, 034=未含金電股發行量加權股價指數, 101=櫃檯買賣發行量加權股價指數(OTC)
+  - Sector (TWSE 28-sector): 015=水泥工業, 016=食品工業, 017=塑膠工業, 018=紡織纖維, 019=電機機械, 020=電器電纜, 021=化學生技醫療, 022=玻璃陶瓷, 023=造紙工業, 024=鋼鐵工業, 025=橡膠工業, 026=汽車工業, 027=電子工業, 028=建材營造, 029=航運業, 030=觀光事業, 031=金融保險, 032=貿易百貨, 033=其他, 035=油電燃氣業, 036=半導體業, 037=電腦及週邊設備業, 038=光電業, 039=通信網路業, 040=電子零組件業, 041=電子通路業, 042=資訊服務業, 043=其他電子業
+  - Sector (aggregated): 004=化學工業, 005=生技醫療業, 006=水泥窯製, 007=食品類股, 008=塑膠化工, 009=紡織纖維, 010=機電類, 011=造紙類, 012=建材營造類指數, 014=金融保險類指數
+  - Themed / Smart Beta / ESG: 046=低碳高息40指數, 047=成長高股息指數, 048=工業4.0指數, 049=半導體收益指數, 050=臺灣上市上櫃多因子優選成長30指數, 051=臺灣上市上櫃IC設計報酬指數, 052=台灣上市上櫃永續價值指數, 053=臺灣上市上櫃企業社會責任中小型指數, 056=智慧投資多因子30報酬指數, 057=智慧投資多因子30指數, 060=智慧中立指數, 061=勞工權益指數, 062=電子菁英30報酬指數, 064=臺灣上市500大報酬指數, 066=中小型300報酬指數, 067=中小型300指數, 068=特選大蘋果報酬指數, 069=存股雙十等權重報酬指數, 070=漲升股利150報酬指數, 071=臺灣中小型公司治理指數, 072=臺灣IPO指數, 073=價值投資指數, 074=臺灣永續指數, 076=特選高息低波指數, 077=臺灣生技指數, 079=中小型A級動能50指數, 082=低波動股利精選30指數, 083=電子菁英30指數, 084=工業菁英30指數, 085=藍籌30指數, 087=漲升股利150指數, 088=小型股300指數, 089=臺灣公司治理100指數, 092=臺灣高薪100指數, 093=寶島股價指數, 094=臺灣就業99指數, 095=臺灣中型100指數, 096=臺灣資訊科技指數, 097=臺灣發達指數, 098=台灣高股息指數, 099=台灣50指數
+  - Leverage / inverse / derivative: 054=特選大蘋果報酬反向一倍指數, 055=特選大蘋果報酬正向兩倍指數, 058=加權指數掩護性臺指買權價外5％報酬指數, 059=台股期貨指數, 090=電子類反向指數, 091=電子類兩倍槓桿指數
+- Full reference: https://finmind.github.io/tutor/TaiwanMarket/IndexCodes/
+
+### TaiwanFutOptTickInfo (期貨、選擇權即時報價總覽)
+- Tier: Free
+- Params: dataset=TaiwanFutOptTickInfo
+- Columns: code, callput, date, name, listing_date, expire_price, update_date
+
+### taiwan_futures_snapshot (台股期貨即時資訊)
+- Tier: Sponsor
+- Params: dataset=taiwan_futures_snapshot, data_id=TXF (or empty for all)
+- Columns: open, high, low, close, change_price, change_rate, average_price, volume, total_volume, amount, total_amount, yesterday_volume, buy_price, buy_volume, sell_price, sell_volume, volume_ratio, date, futures_id, TickType
+
+### taiwan_options_snapshot (台股選擇權即時資訊)
+- Tier: Sponsor
+- Params: dataset=taiwan_options_snapshot, data_id=TXO (or empty for all)
+- data_id contract series: TXO = monthly; TX1, TX2, TX3, TX4, TX5 = weekly expiring on the 1st-5th Wednesday of the month; TXU, TXV, TXX, TXY, TXZ = weekly expiring on the 1st-5th Friday of the month
+- A series returns no rows when that contract is not listed yet, or when the month has no such week (e.g. no 5th Friday). This is expected, not missing data.
+- If a contract has not traded yet today, the row carries the price and volume from the last session in which it did trade; use the date field to tell whether a row is a same-day quote.
+- Columns: open, high, low, close, change_price, change_rate, average_price, volume, total_volume, amount, total_amount, yesterday_volume, buy_price, buy_volume, sell_price, sell_volume, volume_ratio, date, options_id, TickType
+
+---
+
+## Taiwan Market - Convertible Bond (8 datasets)
+
+### TaiwanStockConvertibleBondInfo (可轉債總覽)
+- Tier: Backer/Sponsor
+- Params: dataset=TaiwanStockConvertibleBondInfo
+- Columns: cb_id, cb_name, InitialDateOfConversion, DueDateOfConversion, IssuanceAmount
+
+### TaiwanStockConvertibleBondDaily (可轉債日成交資訊)
+- Tier: Backer/Sponsor
+- Params: dataset=TaiwanStockConvertibleBondDaily, data_id=15131, start_date=2020-04-01, end_date=2020-04-10
+- Params (all, Backer/Sponsor): dataset=TaiwanStockConvertibleBondDaily, start_date=2020-04-01 (不帶 data_id，取得該日所有可轉債資料)
+- Columns: cb_id, cb_name, transaction_type, close, change, open, max, min, no_of_transactions, unit, trading_value, avg_price, next_ref_price, next_max_limit, next_min_limit, date
+
+### TaiwanStockConvertibleBondInstitutionalInvestors (可轉債三大法人日交易資訊)
+- Tier: Backer/Sponsor
+- Params: dataset=TaiwanStockConvertibleBondInstitutionalInvestors, data_id=15131, start_date=2020-04-01, end_date=2020-04-10
+- Params (all, Backer/Sponsor): dataset=TaiwanStockConvertibleBondInstitutionalInvestors, start_date=2020-04-01 (不帶 data_id，取得該日所有可轉債資料)
+- Columns: Foreign_Investor_Buy, Foreign_Investor_Sell, Foreign_Investor_Overbuy, Investment_Trust_Buy, Investment_Trust_Sell, Investment_Trust_Overbuy, Dealer_self_Buy, Dealer_self_Sell, Dealer_self_Overbuy, Total_Overbuy, cb_id, cb_name, date
+
+### TaiwanStockConvertibleBondDailyOverview (可轉債每日總覽資訊)
+- Tier: Backer/Sponsor
+- Params: dataset=TaiwanStockConvertibleBondDailyOverview, data_id=15131, start_date=2020-04-01, end_date=2020-04-10
+- Params (all, Backer/Sponsor): dataset=TaiwanStockConvertibleBondDailyOverview, start_date=2020-04-01 (不帶 data_id，取得該日所有可轉債資料)
+- Columns: cb_id, cb_name, date, InitialDateOfConversion, DueDateOfConversion, InitialDateOfStopConversion, DueDateOfStopConversion, ConversionPrice, NextEffectiveDateOfConversionPrice, LatestInitialDateOfPut, LatestDueDateOfPut, LatestPutPrice, InitialDateOfEarlyRedemption, DueDateOfEarlyRedemption, EarlyRedemptionPrice, DateOfDelisted, IssuanceAmount, OutstandingAmount, ReferencePrice, PriceOfUnderlyingStock, InitialDateOfSuspension, DueDateOfSuspension, CouponRate
+- Note: the put/early-redemption fields (LatestInitialDateOfPut, LatestDueDateOfPut, LatestPutPrice, InitialDateOfEarlyRedemption, DueDateOfEarlyRedemption, EarlyRedemptionPrice) are populated only while a put or early-redemption process is publicly announced for that bond; empty values for most bonds on most dates are expected behavior, not missing data. The dataset does not include full static issuance terms (e.g., complete put schedule or redemption price at maturity).
+
+### TaiwanStockConvertibleBondMonthlyAnalysis (可轉換公司債月份分析表)
+- Tier: Backer/Sponsor
+- Data range: 2026-05-01 ~ now
+- Update: Mon-Sat 18:00
+- Params: dataset=TaiwanStockConvertibleBondMonthlyAnalysis, data_id=13166, start_date=2026-05-01, end_date=2026-06-01
+- Columns: cb_id (str), cb_name (str), cb_name_en (str), custody_balance (int), last_month_balance (int), change (int), change_percent (float64), issued_units (int), custody_accounts (int), pledged_units (int), date (str)
+
+---
+
+### TaiwanStockConvertibleBondPutProvision (可轉債賣回權時程)
+- Tier: Backer/Sponsor
+- Data range: 2011-06-22 ~ now (includes announced future put dates, typically up to ~1 year ahead)
+- Update: Mon-Fri 19:00
+- Params: dataset=TaiwanStockConvertibleBondPutProvision, start_date=2011-06-01, end_date=2011-12-31 (data_id is optional)
+- Columns: date (str, put record date), cb_id (str), cb_name (str), PutPrice (float64), PutYieldRate (float64)
+- Note: data_id (convertible bond id) is NOT required - the date range alone returns the put dates of all convertible bonds in that range; add data_id only to filter a single bond. Set end_date to a future date to retrieve upcoming put schedules. Complements TaiwanStockConvertibleBondDailyOverview's put fields (which are only populated during announced put windows).
+
+### TaiwanAssetSwapFixedIncomeDaily (資產交換固定收益日成交資訊)
+- Tier: Backer/Sponsor
+- Data range: 2011-05-03 ~ now
+- Update: Mon-Fri 22:00~24:00
+- Params: dataset=TaiwanAssetSwapFixedIncomeDaily, data_id=17172, start_date=2026-06-15, end_date=2026-06-30
+- Columns: date (str), stock_id (str), stock_name (str), notional_amount (int64), number_of_transactions (int64), rate_lowest (float64), rate_highest (float64), rate_average (float64), contract_term_years (float64)
+
+### TaiwanAssetSwapOptionDaily (資產交換選擇權日成交資訊)
+- Tier: Backer/Sponsor
+- Data range: 2011-05-03 ~ now
+- Update: Mon-Fri 22:00~24:00
+- Params: dataset=TaiwanAssetSwapOptionDaily, data_id=17172, start_date=2026-06-15, end_date=2026-06-30
+- Columns: date (str), stock_id (str), stock_name (str), notional_amount (int64), number_of_transactions (int64), premium_lowest (float64), premium_highest (float64), premium_average (float64), contract_term_years (float64)
+
+---
+
+## Taiwan Market - Others (3 datasets)
+
+### TaiwanStockNews (相關新聞)
+- Tier: Free
+- Params: dataset=TaiwanStockNews, data_id=2330, start_date=2020-04-01
+- Columns: date, stock_id, description, link, source, title
+- Note: Single day per request.
+
+### TaiwanBusinessIndicator (台灣每月景氣對策信號表)
+- Tier: Backer/Sponsor
+- Data range: 1982-01-01 ~ now
+- Params: dataset=TaiwanBusinessIndicator, start_date=2020-01-01, end_date=2020-04-01
+- Columns: date, leading, leading_notrend, coincident, coincident_notrend, lagging, lagging_notrend, monitoring, monitoring_color
+
+### TaiwanStockIndustryChain (個體公司所屬產業鏈)
+- Tier: Backer/Sponsor
+- Params: dataset=TaiwanStockIndustryChain
+- Columns: stock_id, industry, sub_industry, date
+
+---
+
+## International Markets
+
+### USStockInfo (美股總覽)
+- Tier: Free
+- Params: dataset=USStockInfo
+- Columns: date, stock_id, Country, IPOYear, MarketCap, Subsector, stock_name
+
+### USStockPrice (美股股價 daily)
+- Tier: Free
+- Params: dataset=USStockPrice, data_id=^DJI, start_date=2020-06-16, end_date=2021-06-16
+- Columns: date, stock_id, Adj_Close, Close, High, Low, Open, Volume
+
+### USStockPriceMinute (美股股價 minute)
+- Tier: Backer/Sponsor
+- Params: dataset=USStockPriceMinute, data_id=^DJI, start_date=2022-06-16
+- Columns: date, stock_id, close, high, low, open, volume
+
+### UKStockInfo (英股總覽)
+- Tier: Free
+- Params: dataset=UKStockInfo
+- Columns: date, stock_id, Country, stock_name
+
+### UKStockPrice (英股股價)
+- Tier: Free
+- Params: dataset=UKStockPrice, data_id=BP.L, start_date=2020-06-16, end_date=2021-06-16
+- Columns: date, stock_id, Adj_Close, Close, High, Low, Open, Volume
+
+### EuropeStockInfo (歐股總覽)
+- Tier: Free
+- Params: dataset=EuropeStockInfo
+- Columns: date, stock_id, Market, stock_name
+
+### EuropeStockPrice (歐股股價)
+- Tier: Free
+- Params: dataset=EuropeStockPrice, data_id=AALB.AS, start_date=2020-06-16, end_date=2021-06-16
+- Columns: date, stock_id, Adj_Close, Close, High, Low, Open, Volume
+
+### JapanStockInfo (日股總覽)
+- Tier: Free
+- Params: dataset=JapanStockInfo
+- Columns: date, stock_id, Exchange, Sector, stock_name
+
+### JapanStockPrice (日股股價)
+- Tier: Free
+- Params: dataset=JapanStockPrice, data_id=7203.T, start_date=2020-06-16, end_date=2021-06-16
+- Columns: date, stock_id, Adj_Close, Close, High, Low, Open, Volume
+
+---
+
+## Global Economic Data
+
+### TaiwanExchangeRate (外幣對台幣匯率)
+- Tier: Free
+- Params: dataset=TaiwanExchangeRate, data_id=USD, start_date=2006-01-01
+- data_id values: USD, EUR, JPY, GBP, CNY, HKD, AUD, CAD, CHF, IDR, KRW, MYR, NZD, PHP, SEK, SGD, THB, VND, ZAR
+- Columns: date, currency, cash_buy, cash_sell, spot_buy, spot_sell
+
+### InterestRate (央行利率)
+- Tier: Free
+- Params: dataset=InterestRate, data_id=FED, start_date=1982-01-01
+- data_id values: FED, BOE, RBA, PBOC, BOC, ECB, RBNZ, RBI, CBR, BCB, BOJ, SNB
+- Columns: country, date, full_country_name, interest_rate
+
+### GoldPrice (黃金價格)
+- Tier: Free
+- Params: dataset=GoldPrice, start_date=2020-01-01, end_date=2020-01-02
+- Columns: Price, date
+
+### CrudeOilPrices (原油價格)
+- Tier: Free
+- Params: dataset=CrudeOilPrices, data_id=WTI, start_date=2020-01-01, end_date=2020-01-08
+- data_id values: WTI, Brent
+- Columns: date, name, price
+- Note: 現貨價（spot price），非即時報價；最新資料通常延遲數個交易日（約一週），與期貨即時報價不同，請以回傳最新 date 為準。
+
+### GovernmentBondsYield (美國國債殖利率)
+- Tier: Free
+- Params: dataset=GovernmentBondsYield, data_id=United States 10-Year, start_date=2020-01-01
+- data_id values: "United States 1-Month", "United States 2-Month", "United States 3-Month", "United States 6-Month", "United States 1-Year", "United States 2-Year", "United States 3-Year", "United States 5-Year", "United States 7-Year", "United States 10-Year", "United States 20-Year", "United States 30-Year"
+- Columns: date, name, value
+
+### CnnFearGreedIndex (CNN 恐懼與貪婪指數)
+- Tier: Backer/Sponsor
+- Data range: 2011-01-03 ~ now
+- Params: dataset=CnnFearGreedIndex, start_date=2021-01-01, end_date=2021-01-10
+- Columns: date, fear_greed, fear_greed_emotion
+
+---
+
+## Service Status / SLA
+
+FinMind publishes a public, real-time status page at https://status.finmindtrade.com, showing current API status and uptime over the past 24 hours and 90 days, plus a history of incidents.
+
+### How uptime is calculated
+
+Uptime is measured from real API traffic, request by request:
+
+1. Valid requests = successful requests (2xx / 3xx) + server-side errors.
+   - A server-side error is an HTTP 5xx response.
+   - Client errors (4xx, e.g. 400 / 403 / 404 / 429) and connections closed by the client before a response was delivered are not counted as valid requests and do not affect uptime.
+2. uptime % = successful requests ÷ valid requests × 100.
+
+The 24-hour, 90-day and month-to-date figures each sum the requests in that window and compute the ratio once; they are not averages of per-minute or per-day uptime. Windows with no traffic are not counted. Scheduled maintenance windows may be excluded, and their requests count toward neither the numerator nor the denominator.
+
+Uptime is request-based so that an error rate is reflected proportionally: if 1.6% of the requests in a window end in a server-side error, uptime for that window is 98.4%. Measuring instead by whether each block of time counts as "down" would leave a persistent but low error rate looking healthy and uptime pinned at 100%.
+
+### Status levels
+
+When a time window has traffic, it is classified by that window's uptime:
+
+- Operational: >= 99.5%
+- Elevated Error Rates: 95% – 99.5% (95% <= uptime < 99.5%)
+- Partial Outage: 80% – 95% (80% <= uptime < 95%)
+- Major Outage: < 80%
+- No data: no traffic in the period
+
+This uptime is the measurement basis for the FinMind enterprise plan SLA — enterprise service levels are assessed with the same algorithm, kept transparent and consistent with the public status page.
+
+---
+
+## Links
+
+- Documentation: https://finmind.github.io/
+- GitHub: https://github.com/FinMind/FinMind
+- Official Website: https://finmindtrade.com/
+- API Schema: https://finmindtrade.com/analysis/#/data/document
