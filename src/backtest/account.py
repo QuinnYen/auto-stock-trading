@@ -5,7 +5,7 @@
 - 持倉價值 ＝ 股數 × scale × 還原價，scale ＝ 進場原始價 ÷ 進場還原價（等於股息再投入的總報酬）。
 撮合假設（保守）
 - 進場：訊號日收盤後決定，隔天開盤買；開盤已接近漲停（≥ 前收 +9.5%）視為買不到。
-- 出場：停損價在盤中被碰到時以 min(開盤, 停損價) 成交（停損先於停利）；開盤接近跌停（≤ 前收 −9.5%）賣不掉，順延。
+- 出場（stop_close=True 時改為：收盤跌破停損價才標記、隔天開盤賣出，無盤中停損）：停損價在盤中被碰到時以 min(開盤, 停損價) 成交（停損先於停利）；開盤接近跌停（≤ 前收 −9.5%）賣不掉，順延。
 - 滑價：每次買賣單邊不利價差 slip；處置期間的賣出再加 disp_extra_slip。
 - 下市：最後價格日之後仍持有，視為全損。
 帳戶風控：收盤淨值自高點回落 stop_line 即全數賣出並停手 restart_after 個交易日（假設人工重啟，高點重設）。
@@ -28,6 +28,8 @@ class Cfg:
     time_stop: int = 10             # 持有滿 N 個交易日，開盤賣出
     exit_on_attention: bool = True  # 持股被列為注意股，隔天開盤賣出
     risk_pct: float = 0.02
+    risk_sized: bool = True         # False ＝ 固定比例部位：每檔買 pos_cap × 前日淨值（不用風險反推）
+    stop_close: bool = False        # True ＝ 收盤（還原價）≤ 進場價 ×(1−stop_pct) 才標記，隔天開盤賣；不做盤中停損
     max_pos: int = 3
     pos_cap: float = 1 / 3
     min_shares: int = 10            # 價格上限：每檔預算 ÷ 股價 ≥ min_shares
@@ -138,7 +140,7 @@ def simulate(m: Market, entry, rank, elig, cfg: Cfg, start_idx: int, end_idx: in
                 if budget / raw_fill < cfg.min_shares:
                     cnt["候選略過_股價超過價格上限"] += 1
                     continue
-                shares = int(min(cfg.risk_pct * eq_prev / (cfg.stop_pct * raw_fill), budget / raw_fill))
+                shares = int(budget / raw_fill) if not cfg.risk_sized else                     int(min(cfg.risk_pct * eq_prev / (cfg.stop_pct * raw_fill), budget / raw_fill))
                 while shares > 0 and shares * raw_fill + fee(shares * raw_fill) > cash:
                     shares -= 1
                 if shares < 1:
@@ -164,6 +166,8 @@ def simulate(m: Market, entry, rank, elig, cfg: Cfg, start_idx: int, end_idx: in
                 if L[d, j] <= pos["stop"]:
                     cnt["停損順延_跌停鎖死"] += 1
                 continue
+            if cfg.stop_close:
+                continue
             if L[d, j] <= pos["stop"]:
                 sell(j, d, min(O[d, j], pos["stop"]), "停損")
             elif pos["tp"] is not None and H[d, j] >= pos["tp"]:
@@ -180,6 +184,8 @@ def simulate(m: Market, entry, rank, elig, cfg: Cfg, start_idx: int, end_idx: in
                 pos["flag"] = "處置股"
             elif cfg.exit_on_attention and m.attn_exit[d, j]:
                 pos["flag"] = "注意股"
+            elif cfg.stop_close and C[d, j] <= pos["stop"]:
+                pos["flag"] = "停損"
             elif cfg.ma_exit and m.ma_break[d, j]:
                 pos["flag"] = "均線出場"
             elif d - pos["entry_idx"] >= cfg.time_stop - 1:

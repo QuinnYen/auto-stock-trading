@@ -34,19 +34,21 @@ COMMON = re.compile(r"[1-9]\d{3}")
 
 
 TAIPEI = timezone(timedelta(hours=8))
-LOG = ROOT / "data" / "download.log"        # 只記事件（啟動、失敗、維護、結束），附加寫入
-STATUS = ROOT / "data" / "download.status"  # 一行進度，每次覆蓋
+LOG = ROOT / "data" / "logs" / "download.log"        # 只記事件（啟動、失敗、維護、結束），附加寫入
+STATUS = ROOT / "data" / "logs" / "download.status"  # 一行進度，每次覆蓋
 
 
 def log(msg: str) -> None:
     line = f"{datetime.now(TAIPEI):%Y-%m-%d %H:%M:%S} {msg}"
     print(line, flush=True)
+    LOG.parent.mkdir(parents=True, exist_ok=True)
     with LOG.open("a", encoding="utf-8") as f:
         f.write(line + "\n")
 
 
 def set_status(done: int, total: int, current: str, failed: int) -> None:
     now = datetime.now(TAIPEI)
+    STATUS.parent.mkdir(parents=True, exist_ok=True)
     STATUS.write_text(f"{now:%Y-%m-%d %H:%M:%S} 進度 {done}/{total} 目前 {current} 失敗 {failed}\n",
                       encoding="utf-8")
 
