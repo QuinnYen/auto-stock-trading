@@ -99,6 +99,31 @@ CREATE TABLE IF NOT EXISTS month_revenue (
     PRIMARY KEY (stock_id, date)
 ) WITHOUT ROWID;
 
+CREATE TABLE IF NOT EXISTS dividend_policy (
+    stock_id TEXT NOT NULL, date TEXT NOT NULL,
+    year TEXT,
+    stock_earnings_distribution REAL,
+    stock_statutory_surplus REAL,
+    stock_ex_dividend_trading_date TEXT,
+    total_employee_stock_dividend REAL,
+    total_employee_stock_dividend_amount REAL,
+    ratio_employee_stock_dividend_of_total REAL,
+    ratio_employee_stock_dividend REAL,
+    cash_earnings_distribution REAL,
+    cash_statutory_surplus REAL,
+    cash_ex_dividend_trading_date TEXT,
+    cash_dividend_payment_date TEXT,
+    total_employee_cash_dividend REAL,
+    total_number_of_cash_capital_increase REAL,
+    cash_increase_subscription_rate REAL,
+    cash_increase_subscription_price REAL,
+    remuneration_of_directors_and_supervisors REAL,
+    participate_distribution_of_total_shares REAL,
+    announcement_date TEXT,
+    announcement_time TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_dividend_policy ON dividend_policy (stock_id, announcement_date);
+
 CREATE TABLE IF NOT EXISTS attention (
     stock_id TEXT NOT NULL, stock_name TEXT, date TEXT NOT NULL, cumulative INTEGER, info TEXT,
     close REAL, per REAL
@@ -265,6 +290,10 @@ def main() -> None:
                 con, "month_revenue", "month_revenue", "month_revenue",
                 ["stock_id", "date", "country", "revenue", "revenue_month", "revenue_year", "create_time"],
                 ["stock_id", "date", "country", "revenue", "revenue_month", "revenue_year", "create_time"]),
+            "dividend_policy": import_per_stock(
+                con, "dividend_policy", "dividend_policy", "dividend_policy",
+                ["stock_id", "date", "year", "stock_earnings_distribution", "stock_statutory_surplus", "stock_ex_dividend_trading_date", "total_employee_stock_dividend", "total_employee_stock_dividend_amount", "ratio_employee_stock_dividend_of_total", "ratio_employee_stock_dividend", "cash_earnings_distribution", "cash_statutory_surplus", "cash_ex_dividend_trading_date", "cash_dividend_payment_date", "total_employee_cash_dividend", "total_number_of_cash_capital_increase", "cash_increase_subscription_rate", "cash_increase_subscription_price", "remuneration_of_directors_and_supervisors", "participate_distribution_of_total_shares", "announcement_date", "announcement_time"],
+                ["stock_id", "date", "year", "StockEarningsDistribution", "StockStatutorySurplus", "StockExDividendTradingDate", "TotalEmployeeStockDividend", "TotalEmployeeStockDividendAmount", "RatioOfEmployeeStockDividendOfTotal", "RatioOfEmployeeStockDividend", "CashEarningsDistribution", "CashStatutorySurplus", "CashExDividendTradingDate", "CashDividendPaymentDate", "TotalEmployeeCashDividend", "TotalNumberOfCashCapitalIncrease", "CashIncreaseSubscriptionRate", "CashIncreaseSubscriptionpRrice", "RemunerationOfDirectorsAndSupervisors", "ParticipateDistributionOfTotalShares", "AnnouncementDate", "AnnouncementTime"]),
             "split_price": import_meta(
                 con, "TaiwanStockSplitPrice", "split_price",
                 ["stock_id", "date", "type", "before_price", "after_price", "max_price", "min_price",

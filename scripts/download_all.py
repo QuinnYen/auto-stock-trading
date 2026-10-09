@@ -1,6 +1,6 @@
 """下載全市場歷史資料（現有上市 + 全部已下市），原樣存成 data/raw/<資料集>/*.json。
 
-可斷點續傳：已存在的檔案直接跳過；失敗的不寫檔，重跑即會補上。
+可斷點續傳：已存在的檔案直接跳過；暫時性錯誤由 finmind.fetch 重試，仍失敗就停止（不寫檔），重跑即會補上。
 """
 import json
 import re
@@ -84,29 +84,26 @@ def download_meta() -> None:
 
 
 def main() -> None:
+    finmind.on_event = log
     download_meta()
     ids = universe()
     jobs = [(s, d, p) for s in ids for d, p in DATASETS if not (RAW / p / f"{p}_{s}.json").exists()]
     log(f"啟動：{len(ids)} 檔，待下載 {len(jobs)} 個檔案")
 
-    failed = 0
     for i, (stock_id, dataset, prefix) in enumerate(jobs, 1):
         out = RAW / prefix / f"{prefix}_{stock_id}.json"
         wait_out_maintenance()
         try:
             rows = finmind.fetch(dataset, data_id=stock_id, start_date=START, end_date=END)
-        except Exception as e:  # 不寫檔，之後重跑會補上
-            failed += 1
+        except Exception as e:  # finmind.fetch 已依錯誤類型重試過；仍失敗就停止（不寫檔，重跑會續傳）
             log(f"FAIL [{i}/{len(jobs)}] {dataset} {stock_id}: {e}")
-            # 額度用完（402）就等久一點，其他錯誤短暫等待
-            time.sleep(600 if "402" in str(e) else 60)
-            continue
+            raise
         tmp = out.with_suffix(".tmp")
         tmp.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
         tmp.replace(out)
-        set_status(i, len(jobs), stock_id, failed)
+        set_status(i, len(jobs), stock_id, 0)
 
-    log(f"結束：失敗 {failed} 個（有失敗請重跑一次）")
+    log("結束")
 
 
 if __name__ == "__main__":

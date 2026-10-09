@@ -22,10 +22,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "data"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import account  # noqa: E402
+import holdout  # noqa: E402
 import prices  # noqa: E402
 
 OUT = prices.OUT
-PERIODS = {"dev": ("2007-01-01", "2016-12-31"), "val": ("2017-01-01", "2021-12-31"), "final": ("2022-01-01", "2099-12-31")}
+PERIODS = holdout.PERIODS
 SLIPS = (0.0, 0.0025, 0.005)
 N_CONTROL = 30
 
@@ -205,10 +206,10 @@ def main():
     ap.add_argument("--version", default="both", choices=("breakout", "pullback", "both"))
     ap.add_argument("--set", nargs="*", default=[], help="覆寫參數，例如 stop_pct=0.05 tp_pct=0.02")
     ap.add_argument("--no-control", action="store_true")
+    ap.add_argument("--val-confirm", action="store_true")
     ap.add_argument("--final-confirm", action="store_true")
     a = ap.parse_args()
-    if a.period == "final" and not a.final_confirm:
-        raise SystemExit("最後測試期只能跑一次，需明確加上 --final-confirm")
+    holdout.require_access(a.period, "strong_stocks", val_confirm=a.val_confirm, final_confirm=a.final_confirm)
 
     con = sqlite3.connect(prices.DB)
     print("載入資料…", flush=True)

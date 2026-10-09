@@ -21,6 +21,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "data"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import account  # noqa: E402
+import holdout  # noqa: E402
 import prices  # noqa: E402
 import signal_scan as sc  # noqa: E402
 import strong_stocks as ss  # noqa: E402
@@ -165,12 +166,12 @@ def summarize_rule(rule, results, control, extra, cal, lo):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--period", choices=["dev", "val", "final"], default="dev")
+    ap.add_argument("--val-confirm", action="store_true")
     ap.add_argument("--final-confirm", action="store_true")
     ap.add_argument("--seeds", type=int, default=N_SEEDS)
     ap.add_argument("--rules", default="ABC")
     args = ap.parse_args()
-    if args.period == "final" and not args.final_confirm:
-        raise SystemExit("最後測試期只能跑一次，需加 --final-confirm")
+    holdout.require_access(args.period, "account_sim", val_confirm=args.val_confirm, final_confirm=args.final_confirm)
     start, end = ss.PERIODS[args.period]
     con = sqlite3.connect(prices.DB)
     ctx = prepare(con)

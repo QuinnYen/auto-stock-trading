@@ -5,12 +5,16 @@
 data/experiments/scan_dev_report.txt。判斷條件、進場資格、成本門檻都照事前約定，不在這裡調整。
 
 用法：python src/backtest/signal_scan.py
+驗證期（依 docs/訊號驗證事前約定 v2.md）：python src/backtest/signal_scan.py --period val --val-confirm
+  只驗證開發期通過的 7 個組合，事件門檻 100、5 年中至少 3 年為正；報告 scan_val_report.txt，trials.csv 標記 scan-val。
 """
+import argparse
+import csv
 import math
 import sqlite3
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -19,10 +23,11 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "data"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import holdout  # noqa: E402
 import prices  # noqa: E402
 import strong_stocks as ss  # noqa: E402
 
-DEV = ("2007-01-01", "2016-12-31")
+DEV = holdout.PERIODS["dev"]
 LIQ_MIN = 1e8              # 近 20 日平均成交金額
 PRICE_CAP = 600.0          # 原始收盤價上限
 LOCK = 0.095               # 開盤 ≥ 前收 +9.5% 視為漲停買不到
@@ -32,6 +37,8 @@ POSITION = 5000.0          # 白話報告用的每次投入金額
 MIN_MONTH_EVENTS = 5       # 一個月至少幾個事件才納入月序列
 MIN_YEAR_EVENTS = 10
 MIN_POS_YEARS = 6
+VAL_MIN_POS_YEARS = 3       # 驗證期只有 5 年（事前約定 v2 第 4 節）
+VAL_MIN_EVENTS = 100
 MIN_BENCH_STOCKS = 10      # 同日基準至少要有幾檔股票
 MIN_RANK_POOL = 20         # 月度排名的母體少於這個數就不排名
 ALL_H = (3, 5, 10, 20, 40, 60)
@@ -59,6 +66,11 @@ SPECS = [
     Spec("H8", "5日大跌反轉", (3, 5, 10), 0.0025, "std"),
 ]
 N_TESTS = sum(len(s.horizons) for s in SPECS)
+
+# 事前約定 v2 第 3 節：開發期通過的 7 個組合；驗證期事件門檻降為 100
+VAL_COMBOS = {"H4a": (40, 60), "H4b": (20, 40, 60), "H8": (3, 5)}
+VAL_SPECS = [replace(s, horizons=VAL_COMBOS[s.sid], min_events=VAL_MIN_EVENTS) for s in SPECS if s.sid in VAL_COMBOS]
+N_VAL_TESTS = sum(len(s.horizons) for s in VAL_SPECS)
 
 
 def cost_rt(slip):
@@ -287,8 +299,8 @@ def evaluate(spec, h, ts, r, ex, cal):
     return res
 
 
-def verdict(res, rejected):
-    """依事前約定第 6 節；回傳 (是否通過, 白話原因)。"""
+def verdict(res, rejected, min_pos_years=MIN_POS_YEARS):
+    """依事前約定第 6 節（驗證期為 v2 第 4 節）；回傳 (是否通過, 白話原因)。"""
     reasons = []
     if res["n"] < res["min_events"]:
         reasons.append(f"機會太少（只有 {res['n']} 次）")
@@ -296,7 +308,7 @@ def verdict(res, rejected):
         reasons.append("沒有明顯贏過隨機買股票" if res["mean_ex"] > 0 else "表現不如隨機買股票")
     if not res["net"] > 0:
         reasons.append("扣掉成本後平均是虧的")
-    if res["n"] and res["pos_years"] < MIN_POS_YEARS:
+    if res["n"] and res["pos_years"] < min_pos_years:
         reasons.append(f"只有 {res['pos_years']} 個年度有贏過隨機")
     if res["n"] and not res["excl_best"] > 0:
         reasons.append("拿掉最好的一年就不賺了")
@@ -359,10 +371,12 @@ def money(x):
     return f"{x:+,.0f} 元"
 
 
-def build_report(rows, funnel, placebo_info, n_tests):
+def build_report(rows, funnel, placebo_info, n_tests, *, title="訊號掃描報告（開發期 2007～2016；依事前約定 v1）", years=10,
+                 dev_compare=None, extra_summary=(), dev_method_note=True):
+    """dev_compare：{(sid, h): (事件數, 扣成本後平均)}，有值時白話表多一欄『開發期（對照）』；extra_summary 放在一句話結論最前面。"""
     passed = [r for r in rows if r["pass"]]
-    lines = ["# 訊號掃描報告（開發期 2007～2016；依事前約定 v1）", f"產生時間：{datetime.now():%Y-%m-%d %H:%M}", ""]
-    lines += ["## 一句話結論"]
+    lines = [f"# {title}", f"產生時間：{datetime.now():%Y-%m-%d %H:%M}", ""]
+    lines += ["## 一句話結論", *extra_summary]
     if passed:
         names = "、".join(f"{r['sid']} {r['name']}（持有 {r['h']} 天）" for r in passed)
         lines.append(f"- {n_tests} 個組合中，**有 {len(passed)} 個**通過全部篩選條件：{names}。通過只代表『值得進一步建規則做帳戶模擬』，還不是可以交易。")
@@ -372,22 +386,27 @@ def build_report(rows, funnel, placebo_info, n_tests):
     pos_net = [r for r in rows if r["net"] > 0]
     lines.append(f"- 扣成本後平均每次是賺的組合有 {len(pos_net)} 個（共 {n_tests} 個）；但要同時『明顯贏過隨機買股票』才算有本事，不然只是行情好。")
     lines.append(f"- 帳面最好的是 {best['sid']} {best['name']}（持有 {best['h']} 天）：每次投入 {POSITION:,.0f} 元，扣成本後平均 {money(best['net'] * POSITION)}"
-                 f"（{best['net']:+.2%}），一年約 {best['n'] / 10:.0f} 次機會；結論：{'通過' if best['pass'] else '放棄，' + best['reason']}。")
+                 f"（{best['net']:+.2%}），一年約 {best['n'] / years:.0f} 次機會；結論：{'通過' if best['pass'] else '放棄，' + best['reason']}。")
     lines += ["", "## 怎麼讀這份報告",
               f"- **每次投入 {POSITION:,.0f} 元，扣成本後平均賺／賠**：假設每次訊號出現就買 {POSITION:,.0f} 元，持有幾天後賣出，已經扣掉手續費（3 折）、賣出證交稅 0.3% 和滑價（單邊 0.25%，來回總成本約 0.89%）。",
               "- **隨機買股票平均賺／賠**：同一天、同樣持有幾天，隨機買一檔符合資格的股票的平均結果。訊號要比這一欄好，才代表訊號有本事，而不是剛好碰上大盤上漲。",
-              f"- **贏過隨機**：把每個訊號事件換成『同一天隨機挑一檔符合資格的股票』，重複 {N_NULL:,} 次，看真實結果在這些隨機結果裡有多罕見（越罕見越可能是真的），並且考慮到我們一次測了 33 個組合（測越多越容易碰巧好看）。",
+              f"- **贏過隨機**：把每個訊號事件換成『同一天隨機挑一檔符合資格的股票』，重複 {N_NULL:,} 次，看真實結果在這些隨機結果裡有多罕見（越罕見越可能是真的），並且考慮到我們一次測了 {n_tests} 個組合（測越多越容易碰巧好看）。",
               "- 結論標示『通過』才進入下一步（建規則、做 2 萬元帳戶模擬、再用沒看過的年份驗證）；標示『放棄』就不再調整參數重試。", "",
               "## 白話對照表",
-              f"| 訊號 | 持有 | 10 年共幾次（每年約） | 每次投入 {POSITION:,.0f} 元，扣成本後平均 | 扣成本後賺錢的比例 | 隨機買股票平均 | 結論 |",
-              "|---|---|---|---|---|---|---|"]
+              f"| 訊號 | 持有 | {years} 年共幾次（每年約） | 每次投入 {POSITION:,.0f} 元，扣成本後平均 | 扣成本後賺錢的比例 | 隨機買股票平均 |"
+              + (" 開發期（對照）|" if dev_compare else "") + " 結論 |",
+              "|---|---|---|---|---|---|" + ("---|" if dev_compare else "") + "---|"]
     for r in rows:
+        dc = ""
+        if dev_compare:
+            dn, dnet = dev_compare[(r["sid"], r["h"])]
+            dc = f" {dn:,} 次、{money(dnet * POSITION)}（{dnet:+.2%}） |"
         if r["n"] == 0:
-            lines.append(f"| {r['sid']} {r['name']} | {r['h']} 天 | 0 | — | — | — | ❌ 放棄：沒有符合條件的機會 |")
+            lines.append(f"| {r['sid']} {r['name']} | {r['h']} 天 | 0 | — | — | — |{dc} ❌ 放棄：沒有符合條件的機會 |")
             continue
         rand = (r["bench_mean"] - r["cost"]) * POSITION
-        lines.append(f"| {r['sid']} {r['name']} | {r['h']} 天 | {r['n']:,}（{r['n'] / 10:.0f}） | {money(r['net'] * POSITION)}（{r['net']:+.2%}） | "
-                     f"{r['win_net']:.0%} | {money(rand)} | {'✅ 通過' if r['pass'] else '❌ 放棄：' + r['reason']} |")
+        lines.append(f"| {r['sid']} {r['name']} | {r['h']} 天 | {r['n']:,}（{r['n'] / years:.0f}） | {money(r['net'] * POSITION)}（{r['net']:+.2%}） | "
+                     f"{r['win_net']:.0%} | {money(rand)} |{dc} {'✅ 通過' if r['pass'] else '❌ 放棄：' + r['reason']} |")
     lines += ["", "---", "## 技術細節（事前約定第 8 節）",
               "| 檢定 | 事件數 | 月數 | 平均報酬 | 平均超額 | 超額>0 的比例 | NW t（僅供參考） | p(單尾，隨機化) | BH(q=0.10) | 成本門檻 | 正超額年數 | 去掉最佳年的平均超額 |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|"]
@@ -402,28 +421,29 @@ def build_report(rows, funnel, placebo_info, n_tests):
         if r["n"]:
             ys = "  ".join(f"{y}:{mu:+.1%}" for y, (n, mu, _) in sorted(r["per_year"].items()) if n >= MIN_YEAR_EVENTS)
             lines.append(f"- {r['sid']} h={r['h']}：{ys}")
-    lines += ["", "進場資格漏斗（開發期『股票日』數量）："]
+    lines += ["", "進場資格漏斗（期間內『股票日』數量）："]
     lines += [f"- {k}：{v:,}" for k, v in funnel.items()]
     lines += ["", "統計流程健全性檢查（另抽 "
               f"{N_CHECK} 組隨機結果當『假的真實結果』，走完全部檢定與多重檢定流程）：",
               f"- 至少有 1 個組合通過 BH 的比例：{placebo_info[0]:.1%}（理論上應不超過約 10%）",
-              f"- 各組合『p<0.05』的平均比例：{placebo_info[1].mean():.1%}（理論上約 5%）",
-              "- 方法說明：原本事前約定用 Newey-West t 檢定；第一次掃描的健全性檢查顯示誤判率偏高（至少一個通過 BH 的比例 25%，"
+              f"- 各組合『p<0.05』的平均比例：{placebo_info[1].mean():.1%}（理論上約 5%）"]
+    if dev_method_note:
+        lines += ["- 方法說明：原本事前約定用 Newey-West t 檢定；第一次掃描的健全性檢查顯示誤判率偏高（至少一個通過 BH 的比例 25%，"
               "事件少的 H6a／H6b 單項誤判率 8%～12%），依約定在『看任何訊號結果之前』改為隨機化檢定。訊號、成本與篩選條件沒有改動。"]
     return "\n".join(lines)
 
 
-def prepare(con):
-    """載入資料並建立資格、報酬、基準、訊號（掃描與診斷共用）。"""
+def prepare(con, period=DEV):
+    """載入資料並建立資格、報酬、基準、訊號（掃描與診斷共用）；period 為訊號日範圍（預設開發期）。"""
     print("載入資料…", flush=True)
     d, cal = load(con)
     cols = list(d["C"].columns)
     col_index = {c: i for i, c in enumerate(cols)}
     shape = d["C"].shape
-    lo = int(cal.searchsorted(pd.Timestamp(DEV[0])))
-    hi = int(cal.searchsorted(pd.Timestamp(DEV[1]), side="right"))
+    lo = int(cal.searchsorted(pd.Timestamp(period[0])))
+    hi = int(cal.searchsorted(pd.Timestamp(period[1]), side="right"))
     O, C = d["O"].to_numpy(dtype="float64"), d["C"].to_numpy(dtype="float64")
-    print(f"股票 {shape[1]} 檔；開發期訊號日索引 {lo}～{hi - 1}（{cal[lo].date()}～{cal[hi - 1].date()}）", flush=True)
+    print(f"股票 {shape[1]} 檔；訊號日索引 {lo}～{hi - 1}（{cal[lo].date()}～{cal[hi - 1].date()}）", flush=True)
 
     _, attn_recent, disp_known, _ = ss.alert_matrices(con, cols, cal, 5)
     base, elig = build_eligibility(d["M"], d["RC"], d["C"], attn_recent, disp_known)
@@ -447,9 +467,9 @@ def prepare(con):
             "rets": rets, "bench": bench, "pools": pools, "sigs": sigs}
 
 
-def collect_events(ctx):
+def collect_events(ctx, specs=SPECS):
     out = []
-    for spec in SPECS:
+    for spec in specs:
         for h in spec.horizons:
             ts, js, r, ex = extract_events(ctx["sigs"][spec.sid], ctx["elig"][spec.elig], ctx["entry_ok"], ctx["rets"][h],
                                            ctx["bench"][h], h, ctx["lo"], ctx["hi"])
@@ -457,27 +477,68 @@ def collect_events(ctx):
     return out
 
 
+def val_conclusions(rows):
+    """事前約定 v2 第 5 節：H4 族 5 個組合至少 2 個通過才算 52 週新高優勢在驗證期仍成立；H8 兩個都通過才算成立。"""
+    ok = {(r["sid"], r["h"]): r["pass"] for r in rows}
+    n_h4 = sum(v for (sid, _), v in ok.items() if sid in ("H4a", "H4b"))
+    h4 = n_h4 >= 2
+    h8 = ok[("H8", 3)] and ok[("H8", 5)]
+    return h4, h8, [
+        f"- 7 個組合中 **{sum(ok.values())} 個**通過驗證期篩選（事前約定 v2 第 4 節）。",
+        f"- 52 週新高這一族（H4a、H4b 共 5 個組合）通過 {n_h4} 個：**{'優勢在驗證期仍然成立' if h4 else '優勢未能在驗證期重現，放棄此族，不換參數重試'}**（需至少 2 個）。",
+        f"- 短期反轉（H8 兩個組合）：**{'成立' if h8 else '不成立'}**（需兩個都通過）。"]
+
+
+def load_dev_compare(path=None):
+    """從 trials.csv 讀開發期（scan-dev）每個組合的事件數與扣成本後平均，供驗證期報告並列對照。"""
+    out = {}
+    with (path or ss.OUT / "trials.csv").open(encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            if row["period"] == "scan-dev":
+                out[(row["version"], int(row["exit"][2:]))] = (int(row["trades"]), float(row["avg_ret"]) if row["avg_ret"] else float("nan"))
+    return out
+
+
+def apply_verdicts(results, pvals, min_pos_years):
+    """對全部檢定做 BH，再逐一套用通過條件，結果寫回 results。"""
+    for r, p_, rj in zip(results, pvals, bh_reject(pvals)):
+        r["p"], r["bh"] = float(p_), bool(rj)
+        r["pass"], r["reason"] = verdict(r, bool(rj), min_pos_years)
+
+
+def scan_config(name):
+    """各期間的掃描設定：(檢定清單, 檢定數, 訊號日期間, 正超額年數門檻)。"""
+    if name == "val":
+        return VAL_SPECS, N_VAL_TESTS, holdout.PERIODS["val"], VAL_MIN_POS_YEARS
+    return SPECS, N_TESTS, DEV, MIN_POS_YEARS
+
+
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--period", choices=["dev", "val"], default="dev")
+    ap.add_argument("--val-confirm", action="store_true")
+    args = ap.parse_args()
+    holdout.require_access(args.period, "signal_scan", val_confirm=args.val_confirm)
+    val = args.period == "val"
+    specs, n_tests, period, min_pos_years = scan_config(args.period)
     con = sqlite3.connect(prices.DB)
-    ctx = prepare(con)
+    ctx = prepare(con, period)
     cal, shape, lo, hi, C = ctx["cal"], ctx["shape"], ctx["lo"], ctx["hi"], ctx["C"]
     elig, base, entry_ok, rets, bench, pools = (ctx[k] for k in ("elig", "base", "entry_ok", "rets", "bench", "pools"))
+    assert period[0] <= str(cal[lo].date()) and str(cal[hi - 1].date()) <= period[1], "訊號日範圍超出指定期間"
     results, items, observed = [], [], []
-    for spec, h, ts, js, r, ex in collect_events(ctx):
+    for spec, h, ts, js, r, ex in collect_events(ctx, specs):
         res = evaluate(spec, h, ts, r, ex, cal)
         item = prepare_test(ts, h, pools[h], cal)
         results.append(res)
         items.append(item)
         observed.append(stat_mean(ex, item["inv"], item["cnt"]) if len(ts) else float("nan"))
         print(f"  {spec.sid} h={h}：{len(ts)} 個事件", flush=True)
-    assert len(results) == N_TESTS == 33
+    assert len(results) == n_tests == (7 if val else 33)
 
     print("隨機化檢定…", flush=True)
     pvals, any_rej, raw_rate = randomization_pvalues(items, observed, np.random.default_rng(0))
-    rej = bh_reject(pvals)
-    for r, p_, rj in zip(results, pvals, rej):
-        r["p"], r["bh"] = float(p_), bool(rj)
-        r["pass"], r["reason"] = verdict(r, bool(rj))
+    apply_verdicts(results, pvals, min_pos_years)
     placebo_info = (any_rej, raw_rate)
 
     window = np.zeros(shape, dtype=bool)
@@ -485,11 +546,16 @@ def main():
     funnel = {"有價格": int((window & np.isfinite(C)).sum()), "且流動性 ≥ 1 億、原始價 ≤ 600 元": int((window & base).sum()),
               "且非近期注意股、非處置股（標準資格）": int((window & elig["std"]).sum()),
               "且隔天買得到（標準資格）": int((window & elig["std"] & entry_ok).sum())}
-    text = build_report(results, funnel, placebo_info, N_TESTS)
+    if val:
+        _, _, summary = val_conclusions(results)
+        text = build_report(results, funnel, placebo_info, n_tests, title="訊號驗證報告（驗證期 2017～2021；依事前約定 v2）", years=5,
+                            dev_compare=load_dev_compare(), extra_summary=summary, dev_method_note=False)
+    else:
+        text = build_report(results, funnel, placebo_info, n_tests)
     ss.OUT.mkdir(parents=True, exist_ok=True)
-    (ss.OUT / "scan_dev_report.txt").write_text(text, encoding="utf-8")
+    (ss.OUT / f"scan_{args.period}_report.txt").write_text(text, encoding="utf-8")
     for r in results:
-        ss.log_trial({"time": datetime.now().isoformat(timespec="seconds"), "period": "scan-dev", "version": r["sid"],
+        ss.log_trial({"time": datetime.now().isoformat(timespec="seconds"), "period": f"scan-{args.period}", "version": r["sid"],
                       "exit": f"h={r['h']}", "slip": (r["cost"] - FEE_RT) / 2, "sig": r["name"], "cfg": "",
                       "cagr": "", "mdd": "", "triggers": "", "trades": r["n"], "win": r["win_net"],
                       "avg_net": r["net"] * POSITION if r["n"] else "", "avg_ret": r["net"]})

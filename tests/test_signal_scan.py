@@ -13,6 +13,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src" / "backtest"))
+sys.path.insert(0, str(ROOT / "tests"))
 import signal_scan as sc  # noqa: E402
 
 
@@ -369,11 +370,110 @@ def t20_eligibility():
     expect(el["none"][25].tolist() == [True, False, False, True], f"none {el['none'][25]}")
 
 
+# ---------------------------------------------------------------- 驗證期（事前約定 v2）
+def t22_validation_config():
+    """驗證期設定與事前約定 v2 一致：7 個組合、事件門檻 100、5 年中至少 3 年、期間 2017～2021、其餘參數沿用 v1。"""
+    got = {s.sid: (s.horizons, s.slip, s.elig, s.min_events) for s in sc.VAL_SPECS}
+    expected = {"H4a": ((40, 60), 0.0025, "std", 100), "H4b": ((20, 40, 60), 0.0025, "std", 100), "H8": ((3, 5), 0.0025, "std", 100)}
+    expect(got == expected and sc.N_VAL_TESTS == 7, f"驗證期組合不符：{got}")
+    expect(sc.VAL_MIN_POS_YEARS == 3 and sc.VAL_MIN_EVENTS == 100, "驗證期門檻")
+    expect(sc.holdout.PERIODS["val"] == ("2017-01-01", "2021-12-31"), "驗證期期間")
+    base = {(s.sid, s.name): s for s in sc.SPECS}
+    for s in sc.VAL_SPECS:
+        o = base[(s.sid, s.name)]
+        expect(set(s.horizons) <= set(o.horizons), f"{s.sid} 持有期必須是開發期持有期的子集")
+    v = sc.scan_config("val")
+    expect(v[0] is sc.VAL_SPECS and v[1] == 7 and v[2] == ("2017-01-01", "2021-12-31") and v[3] == 3, f"val 設定：{v[1:]}")
+    dv = sc.scan_config("dev")
+    expect(dv[0] is sc.SPECS and dv[1] == 33 and dv[2] == ("2007-01-01", "2016-12-31") and dv[3] == 6, f"dev 設定：{dv[1:]}")
+
+
+def t23_verdict_val_threshold():
+    """驗證期正超額年數門檻為 3：剛好 3 年通過、2 年不通過；同樣的 3 年用開發期門檻（6）則不通過。"""
+    good = {"n": 150, "min_events": 100, "mean_ex": 0.01, "net": 0.005, "pos_years": 3, "excl_best": 0.004}
+    expect(sc.verdict(good, True, sc.VAL_MIN_POS_YEARS)[0], "3 年應通過")
+    ok, why = sc.verdict({**good, "pos_years": 2}, True, sc.VAL_MIN_POS_YEARS)
+    expect(not ok and "2 個年度" in why, f"2 年應不通過：{why}")
+    expect(not sc.verdict(good, True)[0], "預設門檻（6 年）下 3 年不應通過")
+    expect(sc.verdict({**good, "n": 100}, True, 3)[0] and not sc.verdict({**good, "n": 99}, True, 3)[0], "事件門檻 100 的邊界")
+
+
+def t28_apply_verdicts():
+    """apply_verdicts：BH 只在傳入的檢定內計算；年數門檻由參數決定（3 年：門檻 3 通過、門檻 6 不通過）。"""
+    base = {"n": 500, "min_events": 100, "mean_ex": 0.01, "net": 0.005, "pos_years": 3, "excl_best": 0.004}
+    a, b = [dict(base) for _ in range(2)]
+    sc.apply_verdicts(a_ := [a], [0.001], 3)
+    sc.apply_verdicts(b_ := [b], [0.001], 6)
+    expect(a["pass"] and a["bh"] and a["p"] == 0.001, f"門檻 3 應通過：{a}")
+    expect(not b["pass"] and "3 個年度" in b["reason"], f"門檻 6 不應通過：{b}")
+    c = [dict(base), dict(base)]
+    sc.apply_verdicts(c, [0.06, 0.2], 3)
+    expect([x["bh"] for x in c] == [False, False], "p=.06 與 .2 在 2 個檢定下 BH(q=.1) 都不拒絕")
+    sc.apply_verdicts(c, [0.04, 0.2], 3)
+    expect([x["bh"] for x in c] == [True, False], "p=.04 在 2 個檢定下拒絕（.04 ≤ .1×1/2）")
+
+
+def t24_val_conclusions():
+    """家族判定：H4 族 5 個組合至少 2 個通過才成立；H8 兩個都通過才成立。"""
+    def rows(passing):
+        return [{"sid": s, "h": h, "pass": (s, h) in passing} for s, hs in sc.VAL_COMBOS.items() for h in hs]
+    h4, h8, _ = sc.val_conclusions(rows({("H4a", 60), ("H4b", 60)}))
+    expect(h4 and not h8, f"H4 兩個通過應成立、H8 不成立：{h4} {h8}")
+    h4, h8, _ = sc.val_conclusions(rows({("H4b", 60)}))
+    expect(not h4, "H4 只有 1 個通過不應成立")
+    h4, h8, _ = sc.val_conclusions(rows({("H8", 3)}))
+    expect(not h8, "H8 只有 1 個通過不應成立")
+    h4, h8, lines = sc.val_conclusions(rows({("H8", 3), ("H8", 5), ("H4a", 40), ("H4a", 60), ("H4b", 20)}))
+    expect(h4 and h8, "H4 三個通過且 H8 兩個通過應都成立")
+    expect(lines[0].startswith("- 7 個組合中 **5 個**"), lines[0])
+    h4, h8, lines = sc.val_conclusions(rows(set()))
+    expect(not h4 and not h8 and lines[0].startswith("- 7 個組合中 **0 個**"), "全部不通過")
+
+
+def t25_dev_compare_reads_trials():
+    """開發期對照從 trials.csv 只讀 scan-dev 的列（事件數與扣成本後平均），不混入其他 period。"""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "trials.csv"
+        lines = ["time,period,version,exit,slip,sig,cfg,cagr,mdd,triggers,trades,win,avg_net,avg_ret",
+                 "t,scan-dev,H4b,h=60,0.0025,x,,,,,3535,0.5,87.5,0.0175",
+                 "t,scan-val,H4b,h=60,0.0025,x,,,,,999,0.5,1,0.5",
+                 "t,dev,H4b,h=60,0.0025,x,,,,,1,0.5,1,0.9"]
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        got = sc.load_dev_compare(path)
+    expect(got == {("H4b", 60): (3535, 0.0175)}, f"{got}")
+
+
+def t26_validation_report_layout():
+    """驗證期報告：標題、『5 年共幾次』與每年次數用 5 年換算、並列開發期欄位、一句話結論最前面放家族判定。"""
+    row = {"sid": "H4b", "name": "創250日新高", "h": 60, "n": 500, "months": 40, "cost": 0.008855, "min_events": 100, "mean_ret": 0.03,
+           "mean_ex": 0.02, "bench_mean": 0.01, "hit": 0.6, "win_net": 0.55, "net": 0.02, "t": 2.0, "p": 0.01, "bh": True,
+           "pos_years": 4, "best_year": 2019, "excl_best": 0.015, "per_year": {2019: (100, 0.03, 3.0)}, "pass": True, "reason": ""}
+    text = sc.build_report([row], {"有價格": 1}, (0.05, np.array([0.05])), 7, title="訊號驗證報告（測試）", years=5,
+                           dev_compare={("H4b", 60): (3535, 0.0175)}, extra_summary=["- 家族判定測試行"], dev_method_note=False)
+    expect(text.startswith("# 訊號驗證報告（測試）"), "標題")
+    expect("5 年共幾次" in text and "500（100）" in text and "一年約 100 次機會" in text, "年數換算（500 次 ÷ 5 年 ＝ 每年 100）")
+    expect("開發期（對照）" in text and "3,535 次" in text and "+88 元" in text, "並列開發期欄位")
+    expect(text.index("家族判定測試行") < text.index("扣成本後平均每次是賺的組合"), "家族判定應在一句話結論最前面")
+    expect("一次測了 7 個組合" in text and "Newey-West 檢定；第一次掃描" not in text, "檢定數或方法說明")
+
+
+def t27_validation_requires_confirmation():
+    """不帶 --val-confirm 執行 --period val 會立刻中止：不載入資料、不寫帳本、不寫報告（在沙盒中執行）。"""
+    from sandbox import run_sandboxed
+    r, written = run_sandboxed("signal_scan.py", "--period", "val")
+    expect(r.returncode != 0 and "--val-confirm" in r.stderr + r.stdout, f"應被擋下：{r.returncode}")
+    expect("載入資料" not in r.stdout, "不應開始載入資料")
+    expect(not written, f"不應產生任何檔案：{written}")
+
+
+
 TESTS = [t01_newey_west, t02_benjamini_hochberg, t03_p_value, t04_forward_returns, t05_entry_ok, t06_benchmark,
          t07_h2_volume_spike, t08_monthly_top_decile, t09_new_high_250, t10_h8_reversal, t11_h6_first_attention,
          t12_h5_disposition_tail, t13_price_signals_no_lookahead, t14_extract_events, t15_evaluate_and_year_stats,
          t16_verdict_rules, t17_randomization_test, t21_monthly_statistic, t18_score_definitions,
-         t19_conformity_with_preregistration, t20_eligibility]
+         t19_conformity_with_preregistration, t20_eligibility, t22_validation_config, t23_verdict_val_threshold,
+         t24_val_conclusions, t25_dev_compare_reads_trials, t26_validation_report_layout, t27_validation_requires_confirmation, t28_apply_verdicts]
 
 
 def main():
