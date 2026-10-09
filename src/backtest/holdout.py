@@ -11,8 +11,9 @@ FLAG = {"val": "--val-confirm", "final": "--final-confirm"}
 
 
 def require_access(period: str, script: str, *, val_confirm: bool = False, final_confirm: bool = False,
-                   ledger: Path = LEDGER) -> None:
-    """開發期直接放行；其餘期間未確認就中止，確認後寫入帳本。"""
+                   ledger: Path | None = None) -> None:
+    """開發期直接放行；其餘期間未確認就中止，確認後寫入帳本。ledger 預設在呼叫時才取模組的 LEDGER（讓沙盒與測試能改指向）。"""
+    ledger = ledger or LEDGER
     if period not in PERIODS:
         raise SystemExit(f"未知期間：{period}")
     if period == "dev":

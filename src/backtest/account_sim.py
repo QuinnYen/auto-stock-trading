@@ -119,18 +119,19 @@ def prepare(con):
     std = elig["std"]
     entries = {"A": sc.sig_h4b(d["C"]), "B": sc.top_fraction_monthly(sc.sig_h4a_score(d["C"], d["H"]), std, cal),
                "C": sc.sig_h8(d["C"])}
-    return {"mkt": mkt, "cal": cal, "std": std, "entries": entries, "cols": cols}
+    return {"mkt": mkt, "cal": cal, "std": std, "entries": entries, "cols": cols, "d": d}
 
 
-def summarize_rule(rule, results, control, extra, cal, lo):
-    """一個規則的完整整理：判斷、中位數路徑、白話文字。extra ＝ {情境名: [Result]}。"""
+def summarize_rule(rule, results, control, extra, cal, lo, judge_fn=None, title=None):
+    """一個規則的完整整理：判斷、中位數路徑、白話文字。extra ＝ {情境名: [Result]}。
+    judge_fn：通過條件函式（預設 v1 的 judge）；title：第一行標題（預設「■ 規則 …」）。"""
     finals, cfin = finals_of(results), finals_of(control)
     mi = median_index(finals)
     med = results[mi]
     dates = cal[lo:lo + len(med.equity)]
     yt = year_table(med.equity, dates)
     mdd = max_drawdown(med.equity)
-    checks = judge(finals, cfin, yt.ret.to_numpy(), mdd)
+    checks = (judge_fn or judge)(finals, cfin, yt.ret.to_numpy(), mdd)
     passed = all(ok for _, ok in checks)
     trades = pd.DataFrame(med.trades)
     years = len(med.equity) / 245
@@ -140,8 +141,8 @@ def summarize_rule(rule, results, control, extra, cal, lo):
     def line(label, fin):
         return f"{label}：中位數 {np.median(fin):,.0f} 元（{np.median(fin) - START:+,.0f}），最差 {fin.min():,.0f}，最好 {fin.max():,.0f}"
 
-    lines = [f"■ 規則 {rule.sid}：{rule.name}",
-             f"  用 2 萬元照這個規則做 10 年，{len(finals)} 組隨機挑選的結果：",
+    lines = [title or f"■ 規則 {rule.sid}：{rule.name}",
+             f"  用 2 萬元照這個規則做 {max(1, round(years))} 年，{len(finals)} 組隨機挑選的結果：",
              "  " + line("照規則", finals),
              "  " + line("隨機進場對照（同樣的資金與停損，只是隨機挑股票）", cfin),
              f"  賺錢的次數：{int((finals > START).sum())}／{len(finals)}；中位數路徑最大回檔 {mdd:.0%}",

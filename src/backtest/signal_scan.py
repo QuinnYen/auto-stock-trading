@@ -464,7 +464,8 @@ def prepare(con, period=DEV):
     }
 
     return {"cal": cal, "shape": shape, "lo": lo, "hi": hi, "C": C, "elig": elig, "base": base, "entry_ok": entry_ok,
-            "rets": rets, "bench": bench, "pools": pools, "sigs": sigs}
+            "rets": rets, "bench": bench, "pools": pools, "sigs": sigs,
+            "cols": cols, "RC": d["RC"].to_numpy(dtype="float64"), "d": d}
 
 
 def collect_events(ctx, specs=SPECS):

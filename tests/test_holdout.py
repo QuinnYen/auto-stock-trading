@@ -84,6 +84,31 @@ def t07_entry_points_are_wired():
             expect(not [w for w in written if "holdout_access" in w], f"{script} --period {period} 被擋下的嘗試不應寫入帳本")
 
 
+def t08_default_ledger_follows_module_attribute():
+    """不帶 ledger 參數時，寫入的是呼叫當下的 holdout.LEDGER（沙盒與測試靠改這個屬性隔離帳本；預設值若在匯入時就綁死，隔離會失效）。"""
+    with tempfile.TemporaryDirectory() as d:
+        patched = Path(d) / "patched.log"
+        old = holdout.LEDGER
+        holdout.LEDGER = patched
+        try:
+            holdout.require_access("val", "t", val_confirm=True)
+        finally:
+            holdout.LEDGER = old
+        expect(patched.exists() and len(patched.read_text(encoding="utf-8").splitlines()) == 1, "應寫入被改指向的帳本")
+
+
+def t09_sandboxed_confirmed_run_never_touches_real_ledger():
+    """在沙盒中帶 --val-confirm 啟動入口腳本：帳本只寫在沙盒暫存資料夾，真實帳本與 trials.csv 一個位元組都不變。"""
+    real = holdout.LEDGER
+    trials = real.parent / "trials.csv"
+    before = (real.read_bytes() if real.exists() else b"", trials.read_bytes() if trials.exists() else b"")
+    r, files = run_sandboxed("account_sim_v2.py", "--period", "val", "--val-confirm")
+    after = (real.read_bytes() if real.exists() else b"", trials.read_bytes() if trials.exists() else b"")
+    expect(r.returncode != 0, "空資料庫應失敗")
+    expect(any(f.endswith("holdout_access.log") for f in files), f"沙盒內應有帳本：{files}")
+    expect(before == after, "真實帳本或 trials.csv 被改動了")
+
+
 TESTS = [v for k, v in sorted(globals().items()) if k.startswith("t") and k[1:3].isdigit() and callable(v)]
 
 
